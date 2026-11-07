@@ -1,0 +1,180 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#04030c">
+<style>
+*{box-sizing:border-box}
+html,body{height:100%;margin:0;background:#04030c;color:#eef;overflow:hidden;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;touch-action:manipulation}
+canvas{position:fixed;inset:0;width:100%;height:100%;display:block;cursor:crosshair}
+#grid{image-rendering:pixelated}
+h1{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}
+.hud{position:fixed;left:clamp(16px,3vw,36px);top:max(16px,env(safe-area-inset-top));font-size:12px;line-height:1.6;pointer-events:none}
+.hud b{color:#ffd166;font-weight:700}
+.foot{position:fixed;left:0;right:0;bottom:0;display:flex;justify-content:space-between;align-items:flex-end;gap:12px;flex-wrap:wrap;padding:0 clamp(16px,3vw,36px) max(18px,env(safe-area-inset-bottom));pointer-events:none}
+.tag{font-size:12px;color:#9c97c8}.tag b{display:block;color:#fff;font-size:14px;font-weight:600}
+.links{display:flex;gap:10px;pointer-events:auto}
+a{color:#04030c;background:#ffd166;padding:11px 18px;text-decoration:none;font-weight:700;font-size:13px}
+a+a{background:#ff5ca8}a:hover,a:focus-visible{background:#fff}
+</style>
+</head>
+<body>
+<h1 id="sr"></h1>
+<canvas id="grid" role="img" aria-label="A reinforcement learning value function flooding through corridors that spell this person's name"></canvas>
+<canvas id="agents" aria-hidden="true"></canvas>
+<div class="hud"><div>SWEEP <b id="sweep">0</b> · STATES SOLVED <b id="solved">0</b></div><div id="status">computing the value of every state</div></div>
+<div class="foot">
+  <div class="tag"><b id="role"></b>Reinforcement learning planning. Click anywhere on the letters to move the goal.</div>
+  <div class="links"><a id="gh" rel="me noopener">GitHub</a><a id="li" rel="me noopener">LinkedIn</a></div>
+</div>
+<script src="../config.js"></script>
+<script>
+{
+const S = SITE, $ = id => document.getElementById(id), tier = S.tier();
+$("sr").textContent = S.full; $("role").textContent = S.full; $("gh").href = S.github; $("li").href = S.linkedin;
+const grid = $("grid"), gx = grid.getContext("2d"), ag = $("agents"), ax = ag.getContext("2d");
+const still = matchMedia("(prefers-reduced-motion: reduce)").matches, GAMMA = .988;
+let GW, GH, open, cells, V, V2, img, goal = -1, sweep = 0, converged = false, agents = [], dpr = 1, reached = 0, nb;
+
+function build() {
+  const asp = innerWidth / innerHeight, narrow = asp < 1;
+  GW = narrow ? [130, 170, 210][tier] : [230, 300, 380][tier]; GH = Math.round(GW / asp);
+  grid.width = GW; grid.height = GH;
+  dpr = Math.min(devicePixelRatio || 1, 1.5); ag.width = innerWidth * dpr; ag.height = innerHeight * dpr;
+  const m = document.createElement("canvas"); m.width = GW; m.height = GH;
+  const g = m.getContext("2d", { willReadFrequently: true }), face = '900 100px "Arial Black","Helvetica Neue",Arial,sans-serif';
+  const main = narrow ? S.lines(true) : [S.first.toUpperCase(), S.last.toUpperCase()];
+  g.font = face;
+  const wd = Math.max(...main.map(l => g.measureText(l).width));
+  const size = Math.min(100 * GW * .95 / wd, GH * (narrow ? .58 : .62) / main.length);
+  g.font = face.replace("100px", size + "px");
+  g.textAlign = "center"; g.textBaseline = "middle"; g.fillStyle = "#fff"; g.strokeStyle = "#fff";
+  const top = GH * (narrow ? .17 : .13), lh = size * 1.1, baseY = [];
+  main.forEach((l, i) => {
+    const y = top + lh * (i + .5);
+    g.fillText(l, GW / 2, y); baseY.push(y + size * .32);
+    // A thin baseline rail links the letters of a line, so every letter is reachable.
+    const w = g.measureText(l).width;
+    g.fillRect(GW / 2 - w / 2, y + size * .28, w, Math.max(1.4, size * .05));
+  });
+  // Rails between lines.
+  for (let i = 0; i < baseY.length; i++) g.fillRect(GW / 2 - Math.max(1, size * .05), baseY[i] - size * .1, Math.max(2, size * .1), i === baseY.length - 1 ? size * .1 : lh);
+  // What you do, as a thinner line of smaller corridors.
+  const sub = narrow ? ["ML SOFTWARE", "ELECTRICAL PILOT"] : ["ML SOFTWARE ELECTRICAL PILOT"];
+  g.font = face.replace("100px", "100px");
+  const sw = Math.max(...sub.map(l => g.measureText(l).width)), ss = Math.min(100 * GW * .9 / sw, GH * .1 / sub.length);
+  g.font = face.replace("100px", ss + "px");
+  const y0 = top + lh * main.length + ss * .6 + size * .28;
+  sub.forEach((l, i) => {
+    const y = y0 + i * ss * 1.2, w = g.measureText(l).width;
+    g.fillText(l, GW / 2, y); g.fillRect(GW / 2 - w / 2, y + ss * .24, w, Math.max(1.6, ss * .12));
+  });
+  // One vertical rail joins the name to the smaller words.
+  const railTop = baseY[baseY.length - 1] - size * .1, railEnd = y0 + (sub.length - 1) * ss * 1.2 + ss * .36;
+  g.fillRect(GW / 2 - Math.max(1, size * .05), railTop, Math.max(2, size * .1), railEnd - railTop);
+  const d = g.getImageData(0, 0, GW, GH).data;
+  open = new Uint8Array(GW * GH); cells = [];
+  for (let i = 0; i < GW * GH; i++) if (d[i * 4 + 3] > 110) { open[i] = 1; cells.push(i); }
+  // Keep only the largest connected region, so nothing stays dark forever.
+  const seen = new Int32Array(GW * GH).fill(-1); let best = -1, bestSize = 0, id = 0;
+  for (const c of cells) {
+    if (seen[c] >= 0) continue;
+    const q = [c]; seen[c] = id; let n = 0;
+    while (q.length) { const u = q.pop(); n++; for (const v of [u - 1, u + 1, u - GW, u + GW]) if (v >= 0 && v < GW * GH && open[v] && seen[v] < 0) { seen[v] = id; q.push(v); } }
+    if (n > bestSize) { bestSize = n; best = id; }
+    id++;
+  }
+  const keep = []; for (const c of cells) if (seen[c] === best) keep.push(c); else open[c] = 0;
+  cells = keep;
+  nb = new Int32Array(GW * GH * 4).fill(-1);
+  for (const c of cells) { const opts = [c - 1, c + 1, c - GW, c + GW]; opts.forEach((v, k) => { if (v >= 0 && v < GW * GH && open[v]) nb[c * 4 + k] = v; }); }
+  V = new Float32Array(GW * GH); V2 = new Float32Array(GW * GH); img = gx.createImageData(GW, GH);
+  setGoal(cells[cells.length >> 1]);
+  agents = Array.from({ length: [50, 110, narrow ? 120 : 220][tier] }, () => ({ c: 0, x: 0, y: 0, active: false }));
+}
+function setGoal(c) {
+  goal = c; V.fill(0); V[goal] = 1; sweep = 0; converged = false; reached = 0;
+  $("status").textContent = "computing the value of every state";
+  agents.forEach(a => a.active = false);
+  wake();
+}
+// One synchronous Bellman backup over every state.
+function backup() {
+  let changed = 0, solved = 0;
+  for (const c of cells) {
+    if (c === goal) { V2[c] = 1; solved++; continue; }
+    let m = 0;
+    for (let k = 0; k < 4; k++) { const n = nb[c * 4 + k]; if (n >= 0 && V[n] > m) m = V[n]; }
+    const nv = m * GAMMA;
+    if (Math.abs(nv - V[c]) > 1e-5) changed++;
+    V2[c] = nv; if (nv > 0) solved++;
+  }
+  const t = V; V = V2; V2 = t;
+  sweep++;
+  $("sweep").textContent = sweep; $("solved").textContent = solved.toLocaleString();
+  if (!changed) { converged = true; $("status").textContent = "optimal policy found. agents are following it."; }
+}
+const STOPS = [[60, 40, 150], [50, 120, 255], [74, 255, 195], [255, 225, 120], [255, 90, 170], [255, 255, 255]];
+const LUT = new Uint8Array(768);
+for (let i = 0; i < 256; i++) { const t = i / 255 * (STOPS.length - 1), a = Math.min(t | 0, STOPS.length - 2), f = t - a; for (let k = 0; k < 3; k++) LUT[i * 3 + k] = STOPS[a][k] + (STOPS[a + 1][k] - STOPS[a][k]) * f; }
+function paint() {
+  const d = img.data;
+  d.fill(0);
+  for (let i = 3; i < d.length; i += 4) d[i] = 255;
+  for (const c of cells) {
+    const o = c * 4, v = V[c];
+    if (v <= 0) { d[o] = 22; d[o + 1] = 20; d[o + 2] = 44; continue; }
+    // Value decays with distance. A log scale keeps far corridors colorful.
+    const u = Math.max(0, Math.min(255, 255 + Math.log(v) * 42)) | 0;
+    d[o] = LUT[u * 3]; d[o + 1] = LUT[u * 3 + 1]; d[o + 2] = LUT[u * 3 + 2];
+  }
+  gx.putImageData(img, 0, 0);
+}
+function moveAgents() {
+  const sx = innerWidth / GW, sy = innerHeight / GH;
+  ax.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ax.fillStyle = "rgba(0,0,0,.2)"; ax.globalCompositeOperation = "destination-out"; ax.fillRect(0, 0, innerWidth, innerHeight); ax.globalCompositeOperation = "source-over";
+  ax.fillStyle = "#fff";
+  for (const a of agents) {
+    if (!a.active) {
+      const c = cells[Math.random() * cells.length | 0];
+      if (V[c] <= 0 || Math.random() > .25) continue;
+      a.c = c; a.active = true;
+    }
+    for (let s = 0; s < 2; s++) {
+      let best = -1, bv = V[a.c];
+      for (let k = 0; k < 4; k++) { const n = nb[a.c * 4 + k]; if (n >= 0 && V[n] > bv) { bv = V[n]; best = n; } }
+      if (best < 0) { if (a.c === goal) reached++; a.active = false; break; }
+      a.c = best;
+    }
+    ax.fillRect((a.c % GW) * sx - 1, (a.c / GW | 0) * sy - 1, 2.4, 2.4);
+  }
+}
+let sleepAt = 0, looping = false, n = 0;
+function wake() { sleepAt = performance.now() + 30000; if (!looping && !still) { looping = true; requestAnimationFrame(frame); } }
+function frame() {
+  if (performance.now() > sleepAt) { looping = false; return; }
+  requestAnimationFrame(frame);
+  if (document.hidden) return;
+  n++;
+  if (!converged && n % 2 === 0) { backup(); paint(); }
+  if (converged || sweep > 18) moveAgents();
+}
+grid.addEventListener("click", () => {});
+$("agents").addEventListener("click", e => {
+  const c0 = (e.clientY / innerHeight * GH | 0) * GW + (e.clientX / innerWidth * GW | 0);
+  let best = -1, bd = 1e9;
+  for (const c of cells) { const dx = c % GW - c0 % GW, dy = (c / GW | 0) - (c0 / GW | 0), d = dx * dx + dy * dy; if (d < bd) { bd = d; best = c; } }
+  if (best >= 0) setGoal(best);
+});
+let rt, bw = innerWidth;
+addEventListener("resize", () => { if (innerWidth === bw) return; bw = innerWidth; clearTimeout(rt); rt = setTimeout(build, 150); });
+S.ready(() => {
+  build();
+  if (still) { while (!converged) backup(); paint(); }
+});
+}
+</script>
+</body>
+</html>

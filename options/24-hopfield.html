@@ -1,0 +1,193 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#080503">
+<style>
+*{box-sizing:border-box}
+html,body{min-height:100%;margin:0;background:#080503;color:#ffdfa8;font:12px/1.45 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+body{min-height:100dvh;display:flex;flex-direction:column;justify-content:center;gap:14px;padding:max(16px,env(safe-area-inset-top)) clamp(14px,3vw,40px) max(16px,env(safe-area-inset-bottom))}
+h1{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}
+header{display:flex;justify-content:space-between;gap:10px;color:#a97f46}
+#state{color:#ffb641;text-align:right}
+.frame{background:#0d0806;border:10px solid #17100b;border-radius:10px;box-shadow:inset 0 0 40px #000,0 0 50px #ff9d1a22;padding:clamp(6px,1.5vw,18px)}
+#led{display:block;width:100%;height:auto;cursor:crosshair;touch-action:none}
+.row{display:flex;gap:10px;flex-wrap:wrap;align-items:center;justify-content:space-between}
+.btns{display:flex;gap:6px;flex-wrap:wrap}
+button{font:inherit;color:#ffb641;background:#120c07;border:1px solid #6c4a1d;padding:7px 11px;cursor:pointer}
+button:hover,button:focus-visible{background:#2a1b0b}
+button[aria-pressed=true]{background:#ffb641;color:#080503;font-weight:700}
+#energy{display:block;width:min(100%,280px);height:36px}
+.links{display:flex;gap:10px}
+a{color:#080503;background:#ffb641;padding:9px 16px;text-decoration:none;font-weight:700;font-size:13px}
+a+a{background:#ffdfa8}a:hover,a:focus-visible{background:#fff}
+footer{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}
+footer b{font-size:14px;color:#fff;font-weight:600}
+</style>
+</head>
+<body>
+<h1 id="sr"></h1>
+<header><span>Hopfield network · <span id="n"></span> neurons · <span id="w"></span> synapses</span><span id="state">recalling from noise</span></header>
+<div class="frame"><canvas id="led" role="img" aria-label="An LED matrix neural memory recalling this person's name"></canvas></div>
+<div class="row"><div class="btns" id="btns"></div><canvas id="energy" aria-hidden="true"></canvas></div>
+<footer><span><b id="who"></b> · Drag across the matrix to damage it. It heals itself.</span><div class="links"><a id="gh" rel="me noopener">GitHub</a><a id="li" rel="me noopener">LinkedIn</a></div></footer>
+<script src="../config.js"></script>
+<script>
+{
+const S = SITE, $ = id => document.getElementById(id);
+$("sr").textContent = S.full; $("who").textContent = S.full; $("gh").href = S.github; $("li").href = S.linkedin;
+const still = matchMedia("(prefers-reduced-motion: reduce)").matches;
+const FONT = { A:"0E11111F1111", B:"1E11111E11111E", C:"0E11101010110E", D:"1E11111111111E", E:"1F10101E10101F", F:"1F10101E101010", G:"0E11101713110E", H:"11111F11111100", I:"0E04040404040E", J:"0701010101110E", K:"11121418141211", L:"1010101010101F", M:"111B1515111111", N:"11191513111111", O:"0E11111111110E", P:"1E11111E101010", Q:"0E11111115120D", R:"1E11111E141211", S:"0F10100E01011E", T:"1F040404040404", U:"1111111111110E", V:"11111111110A04", W:"11111115151B11", X:"11110A040A1111", Y:"11110A04040404", Z:"1F01020408101F" };
+FONT.A = "0E1111111F1111"; FONT.H = "1111111F111111";
+const COLS = 62, ROWS = 17, NN = COLS * ROWS;
+function paintLine(buf, text, row) {
+  const w = text.length * 6 - 1, x0 = (COLS - w) >> 1;
+  [...text].forEach((ch, i) => {
+    const f = FONT[ch]; if (!f) return;
+    for (let r = 0; r < 7; r++) {
+      const bits = parseInt(f.substr(r * 2, 2), 16);
+      for (let c = 0; c < 5; c++) if (bits & (16 >> c)) buf[(row + r) * COLS + x0 + i * 6 + c] = 1;
+    }
+  });
+}
+function pattern(a, b) { const p = new Int8Array(NN).fill(-1); paintLine(p, a, 1); paintLine(p, b, 9); return p; }
+const up = s => s.toUpperCase().replace(/[^A-Z]/g, "").slice(0, 10);
+const MEMORIES = [
+  { label: S.full, p: pattern(up(S.first), up(S.last)) }, { label: "ML", p: pattern("MACHINE", "LEARNING") },
+  { label: "Software", p: pattern("SOFTWARE", "ENGINEER") }, { label: "Electrical", p: pattern("ELECTRICAL", "ENGINEER") },
+  { label: "Pilot", p: pattern("PRIVATE", "PILOT") },
+];
+// Training: the projection rule, which stores correlated patterns far better than plain Hebbian learning.
+const P = MEMORIES.length, W = new Float32Array(NN * NN);
+(function train() {
+  const C = Array.from({ length: P }, (_, a) => Array.from({ length: P }, (_, b) => { let s = 0; for (let i = 0; i < NN; i++) s += MEMORIES[a].p[i] * MEMORIES[b].p[i]; return s / NN; }));
+  const inv = C.map((r, i) => r.concat(Array.from({ length: P }, (_, j) => +(i === j))));
+  for (let i = 0; i < P; i++) {
+    let piv = i; for (let k = i + 1; k < P; k++) if (Math.abs(inv[k][i]) > Math.abs(inv[piv][i])) piv = k;
+    const t = inv[i]; inv[i] = inv[piv]; inv[piv] = t;
+    const d = inv[i][i]; for (let j = 0; j < 2 * P; j++) inv[i][j] /= d;
+    for (let k = 0; k < P; k++) if (k !== i) { const f = inv[k][i]; for (let j = 0; j < 2 * P; j++) inv[k][j] -= f * inv[i][j]; }
+  }
+  const Ci = inv.map(r => r.slice(P));
+  const proj = new Float32Array(P * NN);
+  for (let a = 0; a < P; a++) for (let i = 0; i < NN; i++) { let s = 0; for (let b = 0; b < P; b++) s += Ci[a][b] * MEMORIES[b].p[i]; proj[a * NN + i] = s; }
+  for (let i = 0; i < NN; i++) {
+    const r = i * NN;
+    for (let a = 0; a < P; a++) { const u = MEMORIES[a].p[i] / NN; if (!u) continue; const o = a * NN; for (let j = 0; j < NN; j++) W[r + j] += u * proj[o + j]; }
+    W[r + i] = 0;
+  }
+})();
+$("n").textContent = NN; $("w").textContent = (NN * (NN - 1)).toLocaleString();
+
+const state = new Int8Array(NN), field = new Float32Array(NN);
+function recompute() { for (let i = 0; i < NN; i++) { let s = 0; const r = i * NN; for (let j = 0; j < NN; j++) s += W[r + j] * state[j]; field[i] = s; } }
+function setBit(i, v) { if (state[i] === v) return; const d = v - state[i], r = i * NN; state[i] = v; for (let j = 0; j < NN; j++) field[j] += W[r + j] * d; }
+function energy() { let e = 0; for (let i = 0; i < NN; i++) e -= field[i] * state[i]; return e / 2 / NN; }
+
+// Drawing: dots prerendered once, then only changed LEDs are repainted.
+const led = $("led"), g = led.getContext("2d");
+let cell = 12, onDot, offDot;
+const shown = new Int8Array(NN);
+function layout() {
+  const r = led.parentElement.clientWidth - parseFloat(getComputedStyle(led.parentElement).paddingLeft) * 2, d = Math.min(devicePixelRatio || 1, 2);
+  cell = Math.max(3, r / COLS * d);
+  led.width = COLS * cell; led.height = ROWS * cell;
+  const mk = (core, glow) => {
+    const c = document.createElement("canvas"); c.width = c.height = Math.ceil(cell);
+    const x = c.getContext("2d"), m = cell / 2, rad = x.createRadialGradient(m, m, 0, m, m, m);
+    rad.addColorStop(0, core); rad.addColorStop(.55, glow); rad.addColorStop(1, "#0000");
+    x.fillStyle = rad; x.fillRect(0, 0, cell, cell); return c;
+  };
+  onDot = mk("#fff3d6", "#ff9d1a"); offDot = mk("#2a1a0c", "#160d06");
+  g.fillStyle = "#0d0806"; g.fillRect(0, 0, led.width, led.height);
+  shown.fill(0); drawAll();
+}
+function drawLed(i) {
+  const x = (i % COLS) * cell, y = (i / COLS | 0) * cell;
+  g.fillStyle = "#0d0806"; g.fillRect(x, y, cell, cell);
+  g.drawImage(state[i] > 0 ? onDot : offDot, x, y);
+  shown[i] = state[i];
+}
+function drawAll() { for (let i = 0; i < NN; i++) if (shown[i] !== state[i]) drawLed(i); }
+
+const energies = [];
+function drawEnergy() {
+  const c = $("energy"), r = c.getBoundingClientRect(), d = Math.min(devicePixelRatio || 1, 2);
+  if (!r.width) return;
+  if (c.width !== (r.width * d | 0)) { c.width = r.width * d; c.height = r.height * d; }
+  const x = c.getContext("2d"); x.setTransform(d, 0, 0, d, 0, 0); x.clearRect(0, 0, r.width, r.height);
+  if (energies.length < 2) return;
+  const hi = Math.max(...energies), lo = Math.min(...energies);
+  x.strokeStyle = "#ffb641"; x.lineWidth = 1.5; x.beginPath();
+  energies.forEach((e, i) => { const a = i / 200 * r.width, b = 2 + (hi - e) / (hi - lo || 1) * (r.height - 4); i ? x.lineTo(a, b) : x.moveTo(a, b); });
+  x.stroke();
+}
+let current = 0, order = [], orderI = 0, settled = false, cycling = true, stableFrames = 0, nextAt = 0, looping = false;
+function corrupt(target, keep) {
+  // Start from noise with a faint trace of the target. The network has to do the rest.
+  const p = MEMORIES[target].p;
+  for (let i = 0; i < NN; i++) state[i] = Math.random() < keep ? p[i] : (Math.random() < .5 ? 1 : -1);
+  recompute(); energies.length = 0;
+}
+function shuffleOrder() { order = []; for (let i = 0; i < NN; i++) order.push(i); for (let i = NN - 1; i > 0; i--) { const j = Math.random() * (i + 1) | 0, t = order[i]; order[i] = order[j]; order[j] = t; } orderI = 0; }
+function recall(idx, keep) {
+  current = idx; corrupt(idx, keep); shuffleOrder(); stableFrames = 0; settled = false;
+  [...$("btns").children].forEach((b, i) => b.setAttribute("aria-pressed", i === idx));
+  $("state").textContent = "recalling from noise";
+  drawAll(); run();
+}
+function run() { if (!looping && !still) { looping = true; requestAnimationFrame(frame); } }
+function frame(t) {
+  if (settled && !cycling) { looping = false; return; }
+  requestAnimationFrame(frame);
+  if (document.hidden) return;
+  if (!settled) {
+    let flips = 0;
+    for (let k = 0; k < 7; k++) {
+      const i = order[orderI]; orderI = (orderI + 1) % NN;
+      const v = field[i] >= 0 ? 1 : -1;
+      if (v !== state[i]) { setBit(i, v); drawLed(i); flips++; }
+    }
+    if (!flips) stableFrames++; else stableFrames = 0;
+    if (energies.length < 200) { energies.push(energy()); drawEnergy(); }
+    if (stableFrames > 170) {
+      settled = true;
+      $("state").textContent = "stable memory: " + MEMORIES[current].label;
+      nextAt = t + (current === 0 ? 5500 : 3200);
+    }
+  } else if (cycling && t > nextAt) {
+    const next = (current + 1) % P;
+    if (next === 0) cycling = false; // After one tour, end on the name and stop.
+    recall(next, .24);
+  }
+}
+MEMORIES.forEach((m, i) => {
+  const b = document.createElement("button"); b.textContent = m.label;
+  b.onclick = () => { cycling = false; recall(i, .24); };
+  $("btns").append(b);
+});
+// Damage: dragging scrambles nearby LEDs and the network repairs them.
+let down = false;
+function damage(e) {
+  const r = led.getBoundingClientRect(), cx = (e.clientX - r.left) / r.width * COLS, cy = (e.clientY - r.top) / r.height * ROWS;
+  for (let y = Math.max(0, cy - 4 | 0); y <= Math.min(ROWS - 1, cy + 4 | 0); y++) for (let x = Math.max(0, cx - 4 | 0); x <= Math.min(COLS - 1, cx + 4 | 0); x++) {
+    if (Math.hypot(x - cx, y - cy) > 4) continue;
+    const i = y * COLS + x; setBit(i, Math.random() < .5 ? 1 : -1); drawLed(i);
+  }
+  cycling = false; stableFrames = 0; settled = false; energies.length = 0;
+  $("state").textContent = "healing"; run();
+}
+led.addEventListener("pointerdown", e => { down = true; led.setPointerCapture(e.pointerId); damage(e); });
+led.addEventListener("pointermove", e => { if (down) damage(e); });
+led.addEventListener("pointerup", () => down = false);
+let rt; addEventListener("resize", () => { clearTimeout(rt); rt = setTimeout(layout, 120); });
+S.ready(() => {
+  layout();
+  if (still) { for (let i = 0; i < NN; i++) state[i] = MEMORIES[0].p[i]; drawAll(); $("state").textContent = "stable memory"; return; }
+  recall(0, .24);
+});
+}
+</script>
+</body>
+</html>

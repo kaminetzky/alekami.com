@@ -1,0 +1,182 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#04040c">
+<style>
+*{box-sizing:border-box}
+html,body{height:100%;margin:0;background:#04040c;color:#eef;overflow:hidden;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+canvas{position:fixed;inset:0;width:100%;height:100%;display:block}
+.bg{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;text-align:center;pointer-events:none;padding:16px}
+h1{margin:0;font:900 clamp(40px,10.5vw,170px)/.9 "Arial Black","Helvetica Neue",Arial,sans-serif;letter-spacing:-.04em;text-transform:uppercase;color:#ffffff0f}
+.hud{position:fixed;left:clamp(16px,3vw,36px);top:max(16px,env(safe-area-inset-top));font-size:12px;line-height:1.6;pointer-events:none}
+.hud b{color:#4affc3;font-weight:700}
+.foot{position:fixed;left:0;right:0;bottom:0;display:flex;justify-content:space-between;align-items:flex-end;gap:12px;flex-wrap:wrap;padding:0 clamp(16px,3vw,36px) max(18px,env(safe-area-inset-bottom));pointer-events:none}
+.tag{font-size:12px;color:#9d9cc4}.tag b{display:block;color:#fff;font-size:15px;font-weight:600}
+.links{display:flex;gap:10px;pointer-events:auto}
+a{color:#04040c;background:#4affc3;padding:11px 18px;text-decoration:none;font-weight:700;font-size:13px}
+a+a{background:#ff5ca8}a:hover,a:focus-visible{background:#fff}
+</style>
+</head>
+<body>
+<div class="bg"><h1 id="name"></h1></div>
+<canvas id="c" aria-hidden="true"></canvas>
+<div class="hud"><div>t-SNE ITERATION <b id="it">0</b> · KL DIVERGENCE <b id="kl">...</b></div><div id="status">organizing</div></div>
+<div class="foot">
+  <div class="tag"><b id="who"></b><span id="sub"></span></div>
+  <div class="links"><a id="gh" rel="me noopener">GitHub</a><a id="li" rel="me noopener">LinkedIn</a></div>
+</div>
+<script src="../config.js"></script>
+<script>
+{
+const S = SITE, $ = id => document.getElementById(id);
+$("name").innerHTML = S.first + "<br>" + S.last; $("who").textContent = S.full;
+$("gh").href = S.github; $("li").href = S.linkedin;
+const still = matchMedia("(prefers-reduced-motion: reduce)").matches;
+const c = $("c"), x = c.getContext("2d");
+// Each concept is tagged with the fields it belongs to. Those tags are the high-dimensional data t-SNE sees.
+const FIELDS = { ml: ["MACHINE LEARNING", "#4affc3"], sw: ["SOFTWARE", "#7fa8ff"], ee: ["ELECTRICAL", "#ffd166"], pi: ["PILOT", "#ff7ab8"] };
+const T = [
+  ["gradient descent", "ml"], ["backpropagation", "ml"], ["transformer", "ml"], ["attention", "ml"], ["embeddings", "ml"], ["overfitting", "ml"], ["loss function", "ml"], ["dropout", "ml"], ["batch norm", "ml"], ["diffusion", "ml"], ["learning rate", "ml"], ["regularization", "ml"], ["inference", "ml sw"], ["tensors", "ml sw"], ["data pipeline", "ml sw"], ["model serving", "ml sw"], ["GPU", "ml sw ee"], ["computer vision", "ml sw"], ["reinforcement learning", "ml pi"], ["sensor fusion", "ml ee pi"], ["LiDAR", "ml ee pi"], ["edge inference", "ml ee sw"], ["convolution", "ml ee"], ["Fourier transform", "ml ee"],
+  ["APIs", "sw"], ["databases", "sw"], ["version control", "sw"], ["unit tests", "sw"], ["concurrency", "sw"], ["compilers", "sw"], ["distributed systems", "sw"], ["caching", "sw"], ["algorithms", "sw"], ["Linux", "sw"], ["code review", "sw"], ["containers", "sw"], ["firmware", "sw ee"], ["microcontrollers", "sw ee"], ["FPGA", "sw ee"], ["embedded C", "sw ee"], ["flight software", "sw pi ee"], ["checklists", "sw pi"],
+  ["voltage", "ee"], ["op-amp", "ee"], ["PCB layout", "ee"], ["oscilloscope", "ee"], ["resistors", "ee"], ["MOSFET", "ee"], ["impedance", "ee"], ["signal processing", "ee"], ["filters", "ee"], ["power supply", "ee"], ["ground plane", "ee"], ["PID control", "ee pi"], ["Kalman filter", "ee pi ml"], ["IMU", "ee pi"], ["avionics", "ee pi"], ["radio", "ee pi"],
+  ["altimeter", "pi"], ["crosswind", "pi"], ["glide slope", "pi"], ["flare", "pi"], ["stall", "pi"], ["METAR", "pi"], ["traffic pattern", "pi"], ["rudder", "pi"], ["VFR", "pi"], ["airspeed", "pi"], ["quadcopter", "pi ee"], ["FPV drones", "pi ee"], ["autopilot", "pi sw ee ml"],
+];
+const N = T.length;
+$("sub").textContent = N + " concepts from one career. Real t-SNE, running on your device.";
+const KEYS = Object.keys(FIELDS);
+// Input vectors: field membership, plus small noise so that identical tags can separate.
+const X = T.map(([, t]) => { const tags = t.split(" "), w = 1 / Math.sqrt(tags.length); return KEYS.map(k => (tags.includes(k) ? w : 0) + (Math.random() - .5) * .3).concat([(Math.random() - .5) * .55, (Math.random() - .5) * .55, (Math.random() - .5) * .55]); });
+// Pairwise affinities with a per-point bandwidth search to match the perplexity.
+const PERP = 7, Pm = new Float32Array(N * N);
+{
+  const D = new Float32Array(N * N);
+  for (let i = 0; i < N; i++) for (let j = 0; j < N; j++) { let s = 0; for (let k = 0; k < X[i].length; k++) s += (X[i][k] - X[j][k]) ** 2; D[i * N + j] = s; }
+  const row = new Float32Array(N), target = Math.log(PERP);
+  for (let i = 0; i < N; i++) {
+    let beta = 1, lo = 0, hi = 1e9;
+    for (let it = 0; it < 50; it++) {
+      let sum = 0;
+      for (let j = 0; j < N; j++) { row[j] = i === j ? 0 : Math.exp(-D[i * N + j] * beta); sum += row[j]; }
+      let H = 0;
+      for (let j = 0; j < N; j++) if (row[j] > 1e-12) { const p = row[j] / sum; H -= p * Math.log(p); }
+      if (Math.abs(H - target) < 1e-3) break;
+      if (H > target) { lo = beta; beta = hi >= 1e9 ? beta * 2 : (beta + hi) / 2; } else { hi = beta; beta = (lo + beta) / 2; }
+    }
+    let sum = 0; for (let j = 0; j < N; j++) sum += row[j];
+    for (let j = 0; j < N; j++) Pm[i * N + j] = row[j] / (sum || 1);
+  }
+  for (let i = 0; i < N; i++) for (let j = i + 1; j < N; j++) { const v = Math.max(1e-9, (Pm[i * N + j] + Pm[j * N + i]) / (2 * N)); Pm[i * N + j] = Pm[j * N + i] = v; }
+}
+const Y = new Float32Array(N * 2), Vel = new Float32Array(N * 2), Gr = new Float32Array(N * 2), Gains = new Float32Array(N * 2).fill(1);
+for (let i = 0; i < N * 2; i++) Y[i] = (Math.random() - .5) * 1e-1;
+let iter = 0, klv = 0;
+const ITERS = 750;
+function tsneStep() {
+  const ex = iter < 110 ? 6 : 1, mom = iter < 110 ? .5 : .8, lr = 45;
+  Gr.fill(0);
+  let kl = 0, sumQ = 0;
+  const Q = new Float32Array(N * N);
+  for (let i = 0; i < N; i++) for (let j = i + 1; j < N; j++) {
+    const dx = Y[i * 2] - Y[j * 2], dy = Y[i * 2 + 1] - Y[j * 2 + 1], q = 1 / (1 + dx * dx + dy * dy);
+    Q[i * N + j] = q; sumQ += 2 * q;
+  }
+  for (let i = 0; i < N; i++) for (let j = i + 1; j < N; j++) {
+    const q = Q[i * N + j], Qij = Math.max(1e-12, q / sumQ), Pij = Pm[i * N + j], m = 4 * (ex * Pij - Qij) * q;
+    const dx = Y[i * 2] - Y[j * 2], dy = Y[i * 2 + 1] - Y[j * 2 + 1];
+    Gr[i * 2] += m * dx; Gr[i * 2 + 1] += m * dy; Gr[j * 2] -= m * dx; Gr[j * 2 + 1] -= m * dy;
+    kl += 2 * Pij * Math.log(Pij / Qij);
+  }
+  for (let i = 0; i < N * 2; i++) {
+    Gains[i] = Math.max(.01, Math.sign(Gr[i]) === Math.sign(Vel[i]) ? Gains[i] * .8 : Gains[i] + .2);
+    Vel[i] = mom * Vel[i] - lr * Gains[i] * Gr[i]; Y[i] += Vel[i];
+  }
+  let mx = 0, my = 0;
+  for (let i = 0; i < N; i++) { mx += Y[i * 2]; my += Y[i * 2 + 1]; }
+  for (let i = 0; i < N; i++) { Y[i * 2] -= mx / N; Y[i * 2 + 1] -= my / N; }
+  iter++; klv = kl;
+}
+const colorOf = t => {
+  const tags = t.split(" "), rgb = [0, 0, 0];
+  for (const k of tags) { const h = FIELDS[k][1]; for (let c = 0; c < 3; c++) rgb[c] += parseInt(h.substr(1 + c * 2, 2), 16) / tags.length; }
+  return "rgb(" + rgb.map(v => v | 0).join(",") + ")";
+};
+const COL = T.map(t => colorOf(t[1]));
+const P2 = new Float32Array(N * 2);
+let W, H, dpr, viewScale = 1;
+function size() {
+  W = innerWidth; H = innerHeight; dpr = Math.min(devicePixelRatio || 1, 2);
+  c.width = W * dpr; c.height = H * dpr;
+  DX.fill(W / 2); DY.fill(H / 2);
+}
+// Display positions follow t-SNE, then push apart wherever labels would overlap.
+const DX = new Float32Array(N + 4), DY = new Float32Array(N + 4), BW = new Float32Array(N + 4), BH = new Float32Array(N + 4);
+let placed = false;
+function declutter(fs) {
+  const items = iter > 320 ? N + 4 : N;
+  for (let pass = 0; pass < 6; pass++) for (let a = 0; a < items; a++) for (let b = a + 1; b < items; b++) {
+    const ox = (BW[a] + BW[b]) / 2 + 3 - Math.abs(DX[a] - DX[b]), oy = (BH[a] + BH[b]) / 2 + 1 - Math.abs(DY[a] - DY[b]);
+    if (ox <= 0 || oy <= 0) continue;
+    if (oy < ox) { const s = DY[a] < DY[b] ? -.5 : .5, m = oy * s * .6; DY[a] += m; DY[b] -= m; }
+    else { const s = DX[a] < DX[b] ? -.5 : .5, m = ox * s * .6; DX[a] += m; DX[b] -= m; }
+  }
+  const padX = W < 700 ? 8 : 14;
+  for (let a = 0; a < items; a++) {
+    DX[a] = Math.max(BW[a] / 2 + padX, Math.min(W - BW[a] / 2 - padX, DX[a]));
+    DY[a] = Math.max(64, Math.min(H - (W < 700 ? 150 : 70), DY[a]));
+  }
+}
+function render() {
+  x.setTransform(dpr, 0, 0, dpr, 0, 0); x.clearRect(0, 0, W, H);
+  let maxX = .01, maxY = .01;
+  for (let i = 0; i < N; i++) { maxX = Math.max(maxX, Math.abs(Y[i * 2])); maxY = Math.max(maxY, Math.abs(Y[i * 2 + 1])); }
+  const padX = W < 700 ? 56 : 92, sx = (W / 2 - padX) / maxX, sy = (H / 2 - (W < 700 ? 110 : 70)) / maxY, cy = W < 700 ? H * .45 : H * .49;
+  viewScale += ((W < 700 ? 1 : 1) - viewScale) * .1;
+  const fs = W < 700 ? 8.5 : Math.max(11, Math.min(14, W / 105));
+  x.font = fs + "px ui-monospace,Menlo,monospace"; x.textAlign = "center"; x.textBaseline = "middle";
+  for (let i = 0; i < N; i++) {
+    BW[i] = x.measureText(T[i][0]).width; BH[i] = fs * 1.25;
+    const tx = W / 2 + Y[i * 2] * sx, ty = cy + Y[i * 2 + 1] * sy;
+    DX[i] += (tx - DX[i]) * .25; DY[i] += (ty - DY[i]) * .25;
+  }
+  // Field names sit at the center of their own cluster once the map has settled.
+  const big = "900 " + (W < 700 ? 13 : 20) + 'px "Arial Black",Arial,sans-serif';
+  if (iter > 320) {
+    x.font = big;
+    KEYS.forEach((k, q) => {
+      let a = 0, b = 0, n = 0;
+      T.forEach((t, i) => { if (t[1] === k) { a += Y[i * 2]; b += Y[i * 2 + 1]; n++; } });
+      const o = N + q, tx = W / 2 + a / n * sx, ty = cy + b / n * sy;
+      if (iter < 330) { DX[o] = tx; DY[o] = ty; }
+      BW[o] = x.measureText(FIELDS[k][0]).width + 8; BH[o] = W < 700 ? 18 : 26;
+      DX[o] += (tx - DX[o]) * .25; DY[o] += (ty - DY[o]) * .25;
+    });
+  }
+  declutter(fs);
+  x.font = fs + "px ui-monospace,Menlo,monospace";
+  for (let i = 0; i < N; i++) { x.fillStyle = COL[i]; x.fillText(T[i][0], DX[i], DY[i]); }
+  if (iter > 320) {
+    x.font = big; x.globalAlpha = Math.min(1, (iter - 320) / 100);
+    KEYS.forEach((k, q) => { x.fillStyle = FIELDS[k][1]; x.fillText(FIELDS[k][0], DX[N + q], DY[N + q]); });
+    x.globalAlpha = 1;
+  }
+}
+function frame() {
+  if (iter >= ITERS + 90) { $("status").textContent = "converged. your CPU is resting."; return; }
+  requestAnimationFrame(frame);
+  if (document.hidden) return;
+  for (let k = 0; k < 2; k++) if (iter < ITERS) tsneStep(); else iter++;
+  render();
+  $("it").textContent = Math.min(iter, ITERS); $("kl").textContent = klv.toFixed(3);
+}
+let rt; addEventListener("resize", () => { clearTimeout(rt); rt = setTimeout(() => { size(); render(); }, 120); });
+S.ready(() => {
+  size();
+  if (still) { while (iter < ITERS) tsneStep(); render(); $("it").textContent = iter; $("status").textContent = "converged"; return; }
+  requestAnimationFrame(frame);
+});
+}
+</script>
+</body>
+</html>

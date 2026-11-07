@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0b0700">
+<style>
+html,body{height:100%;margin:0;background:#0b0700;color:#ffb000;overflow:hidden;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;touch-action:none;user-select:none;-webkit-user-select:none}
+canvas{position:fixed;inset:0;width:100%;height:100%;display:block;cursor:grab}
+canvas.glow{filter:drop-shadow(0 0 3px #ffb00088)}
+.scan{position:fixed;inset:0;pointer-events:none;background:repeating-linear-gradient(0deg,#0000 0 2px,#00000038 2px 3px),radial-gradient(ellipse at center,#0000 55%,#000a)}
+.panel{position:fixed;left:50%;bottom:max(14px,env(safe-area-inset-bottom));transform:translateX(-50%);display:flex;gap:12px;pointer-events:auto}
+a{color:#0b0700;background:#ffb000;padding:8px 14px;text-decoration:none;font-size:13px;font-weight:700;letter-spacing:.1em}
+a:hover,a:focus-visible{background:#fff1c4}
+</style>
+</head>
+<body>
+<canvas id="c" role="img" aria-label="A flight over terrain drawn entirely in amber text characters. Drones ahead form this person's name. Drag to fly."></canvas>
+<div class="scan"></div>
+<div class="panel"><a id="gh" rel="me noopener">[ GITHUB ]</a><a id="li" rel="me noopener">[ LINKEDIN ]</a></div>
+<script src="../config.js"></script>
+<script src="shapes.js"></script>
+<script src="flight.js"></script>
+<script src="drone-sim.js"></script>
+<script src="brain.js"></script>
+<script src="fleet.js"></script>
+<script>
+{
+const S = SITE, FL = FLIGHT, $ = id => document.getElementById(id);
+$("gh").href = S.github; $("li").href = S.linkedin;
+const c = $("c"), x = c.getContext("2d", { alpha: false });
+const still = matchMedia("(prefers-reduced-motion: reduce)").matches, small = Math.min(innerWidth, innerHeight) < 600;
+if (!small) c.classList.add("glow");
+// The 3D scene renders offscreen at one pixel per character cell, then each pixel becomes a character.
+const g3 = document.createElement("canvas"), gl = g3.getContext("webgl", { antialias: false, alpha: false });
+if (!gl) { S.noWebGL(); throw new Error("WebGL unavailable"); }
+const world = FL.scene(gl, small ? 70 : 90);
+const F = FL.aircraft(), fleet = FLEET.create(gl, world, small ? 360 : 520), O = fleet.O;
+fleet.pretrained();
+const st = FL.stick(c, F);
+// The world only uses the light glyphs; the heavy ones are kept for the drones, so the name always stands out.
+const RAMP = " .:-=+";
+
+let W, H, dpr, fs, cw, ch, cols, rows, px;
+function size() {
+  // Text is the costly part to rasterise; a soft CRT doesn't need full retina sharpness.
+  W = innerWidth; H = innerHeight; dpr = Math.min(devicePixelRatio || 1, 1.25);
+  c.width = W * dpr; c.height = H * dpr; x.setTransform(dpr, 0, 0, dpr, 0, 0);
+  // At most about 150 columns: chunkier characters read better and cost far less to draw.
+  fs = Math.max(9, Math.min(18, W / 90)); x.font = fs + "px ui-monospace,Menlo,monospace";
+  cw = x.measureText("M").width; ch = fs * 1.12; cols = Math.floor(W / cw); rows = Math.floor(H / ch);
+  g3.width = cols; g3.height = rows; gl.viewport(0, 0, cols, rows); px = new Uint8Array(cols * rows * 4);
+}
+let clock = 0;
+function simulate(dt) {
+  const aim = fleet.aim(F);
+  FL.fly(F, dt, st.hand ? st.want(dt) : FL.autopilot(F, dt, aim.psi, aim.alt));
+  fleet.flythrough(F, dt, clock, 2600, .9, st.hand);
+  fleet.step(dt, F, [1, 1, 1]);
+}
+function draw() {
+  const cam = FL.basis(F), R = world.render(F, cam, W / H);
+  fleet.render({ R, P: F, aspect: W / H, height: rows, size: 26 });
+  gl.readPixels(0, 0, cols, rows, gl.RGBA, gl.UNSIGNED_BYTE, px);
+  x.fillStyle = "#0b0700"; x.fillRect(0, 0, W, H);
+  x.font = fs + "px ui-monospace,Menlo,monospace"; x.textBaseline = "top";
+  // Two passes per row: amber for the world, white-hot for the brightest cells (the drones).
+  for (let r = 0; r < rows; r++) {
+    let base = "", hot = "", any = false;
+    const src = (rows - 1 - r) * cols * 4;
+    for (let i = 0; i < cols; i++) {
+      // Below a floor, the dusky sky stays blank, so terrain lines and drones stand out.
+      const o = src + i * 4, l = Math.max(px[o], px[o + 1], px[o + 2]) / 255, v = Math.pow(Math.max(0, (l - .32) / .68), .8);
+      const chr = RAMP[Math.min(RAMP.length - 1, v * RAMP.length | 0)];
+      if (Math.min(px[o], px[o + 1], px[o + 2]) > 150) { hot += "#@"[i & 1]; base += " "; any = true; } else { base += chr; hot += " "; }
+    }
+    x.fillStyle = "#ffb000"; x.fillText(base, 0, r * ch);
+    if (any) { x.fillStyle = "#fff4d6"; x.fillText(hot, 0, r * ch); }
+  }
+  // A text HUD on top.
+  const hd = String(Math.round((F.psi * 57.3 + 360) % 360)).padStart(3, "0"), mid = Math.floor(cols / 2);
+  const put = (txt, col, row, color) => { x.fillStyle = "#0b0700"; x.fillRect(col * cw, row * ch, txt.length * cw, ch); x.fillStyle = color || "#ffb000"; x.fillText(txt, col * cw, row * ch); };
+  put("HDG " + hd, mid - 4, 1);
+  put(st.hand ? "HAND FLYING" : "AUTOPILOT · DRAG TO FLY", mid - (st.hand ? 5 : 11), 2, "#fff4d6");
+  put("KIAS " + Math.round(F.v), 2, Math.floor(rows * .45)); put("ALT " + Math.round((F.alt + 420) * 3.28), cols - 11, Math.floor(rows * .45));
+  put("-=[ + ]=-", mid - 4, Math.floor(rows / 2));
+  put(S.full.toUpperCase() + " · " + S.role.toUpperCase(), 2, 1);
+}
+// The flight simulates every frame; the text redraws at a terminal-like 24 frames per second.
+let last = 0, acc = 0;
+const STEP = 1 / 24;
+function frame(t) {
+  requestAnimationFrame(frame);
+  if (document.hidden) { last = t; return; }
+  const dt = Math.min(.05, (t - last) / 1000); last = t; clock += dt; acc += dt;
+  simulate(dt);
+  if (acc >= STEP) { acc %= STEP; draw(); }
+}
+let rt, bw = innerWidth;
+addEventListener("resize", () => {
+  size(); if (still) draw();
+  if (innerWidth === bw) return;
+  bw = innerWidth; clearTimeout(rt);
+  rt = setTimeout(() => { fleet.build(innerWidth / innerHeight < 1, 1.5, true); fleet.assign(fleet.shape()); }, 150);
+});
+S.ready(() => {
+  bw = innerWidth; size(); fleet.build(innerWidth / innerHeight < 1, 1.5, true);
+  fleet.anchorAhead(F, 2600, 0);
+  fleet.drones.forEach(fleet.park);
+  if (still) {
+    fleet.drones.forEach(d => { d.x = d.tx; d.y = d.ty; d.s = 0; });
+    F.x = O.x - O.ax * 1500; F.z = O.z - O.az * 1500; F.alt = O.y;
+    draw();
+  } else requestAnimationFrame(frame);
+});
+}
+</script>
+</body>
+</html>

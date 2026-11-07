@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#07061a">
+<style>
+html,body{height:100%;margin:0;background:#07061a;color:#7dff9b;overflow:hidden;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;touch-action:none;user-select:none;-webkit-user-select:none}
+canvas{position:fixed;inset:0;width:100%;height:100%;display:block}
+#hud{cursor:grab}
+#hud:active{cursor:grabbing}
+.panel{position:fixed;left:50%;bottom:max(14px,env(safe-area-inset-bottom));transform:translateX(-50%);display:flex;flex-direction:column;align-items:center;gap:8px;width:min(100% - 24px,640px);pointer-events:none;text-align:center}
+h1{margin:0;font-size:clamp(16px,2.2vw,30px);font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:#d4ffe0;text-shadow:0 0 14px #2dff6e,0 1px 3px #000}
+.role{margin:0;font-size:clamp(10px,1.05vw,13px);letter-spacing:.12em;color:#ffcf6a;text-shadow:0 1px 3px #000}
+.radio{display:flex;gap:10px;pointer-events:auto;width:100%;justify-content:center}
+a{flex:0 1 230px;color:#ffcf6a;background:#070a0cdd;border:1px solid #7dff9b66;text-decoration:none;padding:9px 10px;font-size:clamp(11px,1.1vw,13px);font-weight:700;letter-spacing:.06em;white-space:nowrap}
+a:hover,a:focus-visible{background:#7dff9b;color:#04140a}
+</style>
+</head>
+<body>
+<canvas id="c" aria-hidden="true"></canvas>
+<canvas id="hud" aria-label="Flight display. A drone fleet flies ahead of the aircraft like a banner, forming this person's name and fields. Drag to steer it."></canvas>
+<div class="panel">
+  <h1 id="name"></h1>
+  <p class="role" id="role"></p>
+  <div class="radio">
+    <a id="gh" rel="me noopener">GITHUB</a>
+    <a id="li" rel="me noopener">LINKEDIN</a>
+  </div>
+</div>
+<script src="../config.js"></script>
+<script src="shapes.js"></script>
+<script src="flight.js"></script>
+<script src="drone-sim.js"></script>
+<script src="fleet.js"></script>
+<script>
+{
+const S = SITE, FL = FLIGHT, DEG = FL.DEG, $ = id => document.getElementById(id);
+$("name").textContent = S.full; $("role").textContent = "WINGMEN · A FLEET THAT FLIES WITH YOU, TRAINED IN YOUR BROWSER";
+$("gh").href = S.github; $("li").href = S.linkedin;
+const c = $("c"), gl = c.getContext("webgl", { antialias: true, alpha: false, powerPreference: "high-performance" });
+if (!gl) { S.noWebGL(); throw new Error("WebGL unavailable"); }
+const still = matchMedia("(prefers-reduced-motion: reduce)").matches;
+const RES = [.55, .8, 1], tier = S.tier(gl), small = Math.min(innerWidth, innerHeight) < 600;
+let level = tier;
+const govern = S.governor(level, l => { level = l; size(); });
+const world = FL.scene(gl, [84, 120, small ? 110 : 170][tier]);
+const F = FL.aircraft(), fleet = FLEET.create(gl, world, [300, 700, small ? 900 : 1400][tier]), O = fleet.O;
+const hud = $("hud"), h = hud.getContext("2d"), st = FL.stick(hud, F);
+
+// Phases: launch (a fixed formation ahead), escort (it flies ahead at your speed and swings as you turn),
+// brake (it slows so you fly through it). After a pass it regroups ahead and escorts again.
+const ESCORT = 1500;
+let phase = "launch", phaseT = 0, morphs = 0, dist = 0, psiF = 0, psiTarget = 0, wanderT = 4;
+function follow(dt) {
+  psiF = FL.wrap(psiF + FL.wrap(F.psi - psiF) * Math.min(1, dt * .7));
+  const x = F.x + Math.sin(psiF) * dist, z = F.z + Math.cos(psiF) * dist;
+  const y = O.y + (Math.max(F.alt + 20, fleet.clearance(x, z, psiF, fleet.shape())) - O.y) * Math.min(1, dt * 1.5);
+  fleet.frame(x, y, z, psiF, true);
+}
+function direct(dt) {
+  phaseT += dt;
+  const p = fleet.plane(F);
+  if (phase === "launch" && -p.ps <= ESCORT) { phase = "escort"; phaseT = 0; dist = -p.ps; psiF = O.psi; }
+  else if (phase === "escort") {
+    dist += (ESCORT - dist) * Math.min(1, dt * 2);
+    if (phaseT > 7) {
+      phaseT = 0;
+      // Every other time, the banner morphs in place. Otherwise it brakes so you can fly through it.
+      if (morphs++ % 2 === 0) { fleet.next(); fleet.assign(fleet.shape()); } else phase = "brake";
+    }
+  } else if (phase === "brake") {
+    dist -= 430 * dt;
+    if (dist < -260) {
+      fleet.next(); dist = 1700; psiF = F.psi;
+      fleet.frame(F.x + Math.sin(psiF) * dist, Math.max(F.alt + 20, fleet.clearance(F.x + Math.sin(psiF) * dist, F.z + Math.cos(psiF) * dist, psiF, fleet.shape())), F.z + Math.cos(psiF) * dist, psiF, false);
+      fleet.assign(fleet.shape());
+      phase = "escort"; phaseT = 0;
+    }
+  }
+  if (phase !== "launch") follow(dt);
+}
+function steer(dt) {
+  if (st.hand) return st.want(dt);
+  if (phase === "escort") {
+    // Gentle S-turns, so you see the banner swing and catch up.
+    wanderT -= dt;
+    if (wanderT <= 0) { psiTarget = F.psi + (Math.random() - .5) * 1.4; wanderT = 6 + Math.random() * 5; }
+    return FL.autopilot(F, dt, psiTarget);
+  }
+  const aim = Math.atan2(O.x - F.x, O.z - F.z);
+  psiTarget = F.psi;
+  return FL.autopilot(F, dt, fleet.plane(F).ps < -350 ? aim : F.psi, O.y);
+}
+
+let W, H, aspect = 1;
+function size() {
+  W = innerWidth; H = innerHeight; aspect = W / H;
+  const dpr = Math.min(devicePixelRatio || 1, small ? 1.5 : 1.75) * RES[level];
+  c.width = W * dpr; c.height = H * dpr; gl.viewport(0, 0, c.width, c.height);
+  hud.width = W * Math.min(devicePixelRatio || 1, 2); hud.height = H * Math.min(devicePixelRatio || 1, 2);
+}
+let clock = 0;
+function simulate(dt) {
+  FL.fly(F, dt, steer(dt));
+  direct(dt);
+  fleet.step(dt, F, fleet.shape().hue);
+}
+function draw() {
+  const cam = FL.basis(F), R = world.render(F, cam, aspect);
+  fleet.render({ R, P: F, aspect, height: c.height });
+  const tight = W < 560, f = fleet;
+  const mode = st.hand ? "HAND FLYING · THE FLEET FOLLOWS"
+    : !f.brain ? "AUTOPILOT · FLEET BRAIN BOOTING"
+    : !f.trained ? (tight ? "" : "FLEET BRAIN ") + "LEARNING · GEN " + f.gen + " · " + (f.err > 50 ? "CRASHING" : f.err.toFixed(2) + " M")
+    : phase === "brake" ? "FLEET SLOWING · FLY THROUGH"
+    : tight ? "ESCORT · FLEET TRAINED HERE" : "ESCORT · FLEET TRAINED ON THIS DEVICE · DRAG TO STEER";
+  FL.hud(hud, h, W, H, F, mode, st.hand || (f.brain && !f.trained) ? FL.AMBER : FL.GREEN, st);
+  const sh = f.shape(), tag = FL.project(cam, F, O.x, O.y + sh.h / 2 * f.K + 70, O.z, W, H);
+  if (sh.cap && tag.z > 300 && tag.x > 20 && tag.x < W - 20 && tag.y > 70 && tag.y < H - 20) {
+    h.fillStyle = "#ff77d0"; h.font = "bold 12px ui-monospace,Menlo,monospace"; h.textAlign = "center"; h.textBaseline = "alphabetic";
+    h.fillText(sh.cap, tag.x, tag.y);
+  }
+}
+let last = 0;
+function frame(t) {
+  requestAnimationFrame(frame);
+  if (document.hidden) { last = t; return; }
+  govern(t);
+  const dt = Math.min(.05, (t - last) / 1000); last = t; clock += dt;
+  simulate(dt); draw();
+}
+let rt, bw = innerWidth;
+addEventListener("resize", () => {
+  size(); if (still) draw();
+  if (innerWidth === bw) return;
+  bw = innerWidth; clearTimeout(rt);
+  rt = setTimeout(() => { fleet.build(innerWidth / innerHeight < 1); fleet.assign(fleet.shape()); }, 150);
+});
+S.ready(() => {
+  bw = innerWidth; size(); fleet.build(innerWidth / innerHeight < 1);
+  fleet.anchorAhead(F, 2700, 0);
+  fleet.drones.forEach(fleet.park);
+  if (still) {
+    fleet.drones.forEach(d => { d.x = d.tx; d.y = d.ty; d.s = 0; });
+    F.x = O.x - O.ax * 1500; F.z = O.z - O.az * 1500; F.alt = O.y;
+    draw();
+  } else { fleet.train(); requestAnimationFrame(frame); }
+});
+}
+</script>
+</body>
+</html>

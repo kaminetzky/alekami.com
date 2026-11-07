@@ -1,0 +1,322 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0d0c0b">
+<style>
+:root{--bg:#0d0c0b;--fg:#f4ecdf;--dim:#928a7c;--hot:#ff6b4a;--line:#2d2a25;--good:#8ee6b0}
+*{box-sizing:border-box}
+html,body{min-height:100%;margin:0;background:var(--bg);color:var(--fg);font:13px/1.45 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+body{min-height:100dvh;display:grid;grid-template-rows:auto auto minmax(0,1fr) auto;gap:14px;padding:max(16px,env(safe-area-inset-top)) clamp(16px,3.2vw,44px) max(16px,env(safe-area-inset-bottom));max-width:1500px;margin:auto}
+header{display:flex;justify-content:space-between;gap:12px;color:var(--dim);font-size:12px}
+#status{color:var(--hot);text-align:right}
+.hero{min-height:clamp(120px,25vh,250px);display:flex;flex-direction:column;justify-content:center}
+.prompt{color:var(--dim);font:italic clamp(20px,3vw,40px)/1.1 Georgia,"Times New Roman",serif}
+h1{margin:0;font:400 clamp(36px,8.4vw,132px)/1 Georgia,"Times New Roman",serif;letter-spacing:-.03em;overflow-wrap:anywhere;min-height:1em}
+h1 .cur{display:inline-block;width:.05em;height:.8em;margin-left:.06em;background:var(--hot);vertical-align:-.04em;animation:bl 1s steps(1) infinite}
+@keyframes bl{50%{opacity:0}}
+main{display:grid;grid-template-columns:1.5fr 1fr 1fr;gap:14px;min-height:0}
+.card{border:1px solid var(--line);padding:11px 13px;min-width:0;min-height:0;display:flex;flex-direction:column;gap:7px}
+.card h2{margin:0;font-size:11px;font-weight:400;letter-spacing:.12em;text-transform:uppercase;color:var(--dim);display:flex;justify-content:space-between;gap:8px}
+.card h2 b{color:var(--fg);font-weight:600;letter-spacing:0}
+#log{flex:1;overflow:hidden;min-height:150px;display:flex;flex-direction:column;justify-content:flex-end}
+#log p{margin:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#log span{color:var(--dim);margin-right:8px}
+.cv{flex:1;min-height:150px;width:100%;display:block}
+#loss{min-height:62px;flex:none;height:62px}
+.try{display:flex;gap:8px;align-items:center}
+input{flex:1;min-width:0;background:none;border:0;border-bottom:1px solid var(--dim);color:var(--fg);font:inherit;font-size:16px;padding:5px 2px;outline:0}
+input:focus{border-color:var(--hot)}
+#answer{min-height:2.9em;color:var(--good);overflow-wrap:anywhere}
+#bars{display:grid;gap:3px}
+.bar{display:grid;grid-template-columns:2ch 1fr 4ch;gap:6px;align-items:center;font-size:12px}
+.bar i{display:block;height:9px;background:var(--hot)}
+footer{display:flex;justify-content:space-between;align-items:center;gap:14px;flex-wrap:wrap}
+.who b{font-weight:600}.who{color:var(--dim)}.who b{color:var(--fg)}
+.links{display:flex;gap:10px}
+a{color:var(--bg);background:var(--fg);padding:9px 16px;text-decoration:none;font-weight:700}
+a+a{background:var(--hot)}
+a:hover,a:focus-visible{background:var(--good)}
+@media (max-width:900px){main{grid-template-columns:1fr}#log{min-height:128px}.cv{min-height:190px}}
+@media (prefers-reduced-motion:reduce){h1 .cur{animation:none}}
+</style>
+</head>
+<body>
+<header><span>tiny_lm.ipynb · <span id="params">0</span> parameters · no server</span><span id="status">initialising</span></header>
+<section class="hero" aria-live="off">
+  <div class="prompt">my name is</div>
+  <h1 id="hero" aria-label=""><span id="heroText"></span><span class="cur"></span></h1>
+</section>
+<main>
+  <section class="card">
+    <h2>Samples while training <b id="steps">0 steps</b></h2>
+    <div id="log"></div>
+    <h2>Cross-entropy loss <b id="lossV">...</b></h2>
+    <canvas id="loss" class="cv"></canvas>
+  </section>
+  <section class="card">
+    <h2>Character embeddings</h2>
+    <canvas id="map" class="cv"></canvas>
+  </section>
+  <section class="card">
+    <h2>Ask it something</h2>
+    <div class="try"><input id="q" aria-label="Prompt for the model" value="i am a " autocomplete="off" autocapitalize="off" spellcheck="false"></div>
+    <div id="answer"></div>
+    <h2>Next character</h2>
+    <div id="bars"></div>
+  </section>
+</main>
+<footer>
+  <span class="who"><b id="who"></b> · <span id="role"></span></span>
+  <div class="links"><a id="gh" rel="me noopener">GitHub</a><a id="li" rel="me noopener">LinkedIn</a></div>
+</footer>
+<script src="../config.js"></script>
+<script id="wk" type="text/plain">
+// A character-level language model in plain JS: embeddings, one tanh layer and a softmax, with hand-written backprop.
+let CH, V, D = 12, K = 10, H = 110, SIZE, iE, iW1, iB1, iW2, iB2, p, g, m, v, data, ctxBuf, x, h, da, logits, pr;
+let stepN = 0, ema = null, adamT = 0, running = true, lastReport = 0;
+const gauss = () => Math.sqrt(-2 * Math.log(1 - Math.random())) * Math.cos(6.2832 * Math.random());
+
+function setup(corpus) {
+  CH = [...new Set(corpus)].sort(); V = CH.length;
+  const idx = Object.fromEntries(CH.map((c, i) => [c, i]));
+  data = Uint8Array.from([...corpus].map(c => idx[c]));
+  self.idx = idx;
+  const I = K * D;
+  iE = 0; iW1 = V * D; iB1 = iW1 + H * I; iW2 = iB1 + H; iB2 = iW2 + V * H; SIZE = iB2 + V;
+  p = new Float32Array(SIZE); g = new Float32Array(SIZE); m = new Float32Array(SIZE); v = new Float32Array(SIZE);
+  for (let i = 0; i < V * D; i++) p[i] = gauss() * .35;
+  for (let i = iW1; i < iB1; i++) p[i] = gauss() / Math.sqrt(I);
+  for (let i = iW2; i < iB2; i++) p[i] = gauss() / Math.sqrt(H);
+  ctxBuf = new Int32Array(K); x = new Float32Array(I); h = new Float32Array(H); da = new Float32Array(H); logits = new Float32Array(V); pr = new Float32Array(V);
+}
+function forward() {
+  const I = K * D;
+  for (let a = 0; a < K; a++) { const e = ctxBuf[a] * D, o = a * D; for (let d = 0; d < D; d++) x[o + d] = p[e + d]; }
+  for (let i = 0; i < H; i++) { let s = p[iB1 + i]; const r = iW1 + i * I; for (let j = 0; j < I; j++) s += p[r + j] * x[j]; h[i] = Math.tanh(s); }
+  let max = -1e9;
+  for (let k = 0; k < V; k++) { let s = p[iB2 + k]; const r = iW2 + k * H; for (let i = 0; i < H; i++) s += p[r + i] * h[i]; logits[k] = s; if (s > max) max = s; }
+  let sum = 0;
+  for (let k = 0; k < V; k++) { pr[k] = Math.exp(logits[k] - max); sum += pr[k]; }
+  for (let k = 0; k < V; k++) pr[k] /= sum;
+}
+function trainStep(batch) {
+  const I = K * D;
+  g.fill(0);
+  let loss = 0;
+  for (let b = 0; b < batch; b++) {
+    const t = Math.random() * data.length | 0;
+    for (let a = 0; a < K; a++) { const q = t - K + a; ctxBuf[a] = data[q < 0 ? q + data.length : q]; }
+    forward();
+    const y = data[t];
+    loss += -Math.log(pr[y] + 1e-9);
+    da.fill(0);
+    for (let k = 0; k < V; k++) {
+      const e = pr[k] - (k === y ? 1 : 0), r = iW2 + k * H;
+      g[iB2 + k] += e;
+      for (let i = 0; i < H; i++) { g[r + i] += e * h[i]; da[i] += e * p[r + i]; }
+    }
+    for (let i = 0; i < H; i++) {
+      const d = da[i] * (1 - h[i] * h[i]), r = iW1 + i * I;
+      g[iB1 + i] += d;
+      for (let j = 0; j < I; j++) {
+        g[r + j] += d * x[j];
+        // Gradient flows on into the embedding of the character at this position.
+        g[ctxBuf[j / D | 0] * D + j % D] += d * p[r + j];
+      }
+    }
+  }
+  adamT++;
+  const lr = Math.max(.0006, .004 * Math.pow(.5, stepN / 3000)), c1 = 1 - Math.pow(.9, adamT), c2 = 1 - Math.pow(.999, adamT);
+  for (let i = 0; i < SIZE; i++) {
+    const d = g[i] / batch;
+    m[i] = .9 * m[i] + .1 * d; v[i] = .999 * v[i] + .001 * d * d;
+    p[i] -= lr * (m[i] / c1) / (Math.sqrt(v[i] / c2) + 1e-8);
+  }
+  stepN++;
+  return loss / batch;
+}
+function setContext(text) {
+  const ids = [...text].map(c => self.idx[c]).filter(i => i !== undefined);
+  // Short prompts are padded with the end of the corpus, which is what really precedes a new line.
+  for (let a = 0; a < K; a++) { const q = ids.length - K + a; ctxBuf[a] = q >= 0 ? ids[q] : data[data.length + q]; }
+}
+function generate(prompt, n, temp) {
+  setContext(prompt);
+  let out = "";
+  for (let s = 0; s < n; s++) {
+    forward();
+    let pick = 0;
+    if (temp === 0) { for (let k = 1; k < V; k++) if (pr[k] > pr[pick]) pick = k; }
+    else {
+      let sum = 0; const w = new Float32Array(V);
+      for (let k = 0; k < V; k++) { w[k] = Math.pow(pr[k], 1 / temp); sum += w[k]; }
+      let r = Math.random() * sum;
+      for (let k = 0; k < V; k++) { r -= w[k]; if (r <= 0) { pick = k; break; } }
+    }
+    if (CH[pick] === "\n") break;
+    out += CH[pick];
+    for (let a = 0; a < K - 1; a++) ctxBuf[a] = ctxBuf[a + 1];
+    ctxBuf[K - 1] = pick;
+  }
+  return out;
+}
+function embeddings2D() {
+  // Two principal directions by power iteration.
+  const mean = new Float32Array(D), M = [];
+  for (let i = 0; i < V; i++) for (let d = 0; d < D; d++) mean[d] += p[i * D + d] / V;
+  for (let i = 0; i < V; i++) { const r = new Float32Array(D); for (let d = 0; d < D; d++) r[d] = p[i * D + d] - mean[d]; M.push(r); }
+  const axes = [];
+  for (let c = 0; c < 2; c++) {
+    let w = new Float32Array(D).map((_, d) => Math.sin(d * 1.7 + c * 2.3 + 1));
+    for (let it = 0; it < 14; it++) {
+      const nw = new Float32Array(D);
+      for (const r of M) { let s = 0; for (let d = 0; d < D; d++) s += r[d] * w[d]; for (let d = 0; d < D; d++) nw[d] += s * r[d]; }
+      for (const a of axes) { let s = 0; for (let d = 0; d < D; d++) s += nw[d] * a[d]; for (let d = 0; d < D; d++) nw[d] -= s * a[d]; }
+      let l = 0; for (let d = 0; d < D; d++) l += nw[d] * nw[d]; l = Math.sqrt(l) || 1;
+      for (let d = 0; d < D; d++) nw[d] /= l;
+      w = nw;
+    }
+    axes.push(w);
+  }
+  return M.map(r => axes.map(a => { let s = 0; for (let d = 0; d < D; d++) s += r[d] * a[d]; return s; }));
+}
+function report(done) {
+  postMessage({
+    type: "report", step: stepN, loss: ema, done,
+    name: generate("\nmy name is ", 24, 0),
+    sample: generate("", 62, .8),
+    map: embeddings2D(), chars: CH,
+  });
+}
+// Training is paced to about 70 steps a second, however fast the machine is.
+// The story reads better, and fast machines stay nearly idle. Slow ones get a time limit per burst.
+const STEPS_PER_BURST = 7, BURST_GAP = 100;
+function burst() {
+  if (!running) return;
+  const t0 = performance.now();
+  for (let s = 0; s < STEPS_PER_BURST && performance.now() - t0 < 60; s++) {
+    const l = trainStep(20);
+    ema = ema === null ? l : ema * .985 + l * .015;
+  }
+  const done = (ema < .045 && stepN > 1500) || stepN >= 16000;
+  if (done) { running = false; report(true); return; }
+  if (performance.now() - lastReport > 450) { lastReport = performance.now(); report(false); }
+  setTimeout(burst, Math.max(20, BURST_GAP - (performance.now() - t0)));
+}
+onmessage = ({ data: d }) => {
+  if (d.type === "init") { setup(d.corpus); postMessage({ type: "params", n: SIZE }); burst(); }
+  if (d.type === "ask") {
+    const was = ctxBuf.slice();
+    const text = d.text.toLowerCase();
+    setContext("\n" + text); forward();
+    const top = [...pr].map((q, i) => [q, CH[i]]).sort((a, b) => b[0] - a[0]).slice(0, 5);
+    const answer = generate("\n" + text, 58, 0);
+    ctxBuf.set(was);
+    postMessage({ type: "answer", top, answer, id: d.id });
+  }
+  if (d.type === "pause") { running = false; }
+  if (d.type === "resume" && !running && stepN < 16000 && !(ema < .045 && stepN > 1500)) { running = true; burst(); }
+};
+</script>
+<script>
+{
+const S = SITE, $ = id => document.getElementById(id);
+$("who").textContent = S.full; $("role").textContent = "ML · Software · Electrical · Pilot";
+$("gh").href = S.github; $("li").href = S.linkedin;
+document.getElementById("hero").setAttribute("aria-label", S.full);
+
+// The training set. Short on purpose: the model is tiny and has to learn it in seconds.
+const name = S.full.toLowerCase();
+const CORPUS = [
+  "my name is " + name + ".", "my name is " + name + " and i am a machine learning engineer.",
+  "my name is " + name + " and i am a private pilot.", "hello, my name is " + name + ".",
+  "i am a machine learning engineer.", "i am a software engineer.", "i am an electrical engineer.", "i am a private pilot.",
+  "i am a machine learning engineer and a private pilot.", "i train neural networks.", "i train neural networks and i fly airplanes.",
+  "i write software and i design circuits.", "i fly airplanes and i fly drones.", "i like circuits and clear skies.",
+  "find me on github.", "find me on linkedin.", "my github is " + S.github.replace("https://github.com/", "") + ".",
+  "the loss goes down.", "the gradients flow.", "the pilot flies the airplane.",
+  "cleared for takeoff, runway two seven.", "cleared to land, runway two seven.", "maintain three thousand feet.",
+  "turn left heading two seven zero.", "climb and maintain five thousand feet.", "this model trained in your browser.", "no server was used.",
+].join("\n") + "\n";
+
+const worker = new Worker(URL.createObjectURL(new Blob([$("wk").textContent], { type: "text/javascript" })));
+let losses = [], map = null, chars = null, finished = false, askId = 0, sawReport = false;
+const log = $("log");
+worker.onmessage = ({ data }) => {
+  if (data.type === "params") $("params").textContent = data.n.toLocaleString();
+  if (data.type === "report") {
+    sawReport = true;
+    $("steps").textContent = data.step.toLocaleString() + " steps";
+    if (data.loss !== null) {
+      $("lossV").textContent = data.loss.toFixed(3);
+      losses.push(data.loss); if (losses.length > 300) losses.shift();
+      drawLoss();
+    }
+    $("heroText").textContent = data.name.replace(/\.$/, "") || " ";
+    map = data.map; chars = data.chars; drawMap();
+    const p = document.createElement("p");
+    const sp = document.createElement("span"); sp.textContent = String(data.step).padStart(5, " ");
+    p.append(sp, document.createTextNode(data.sample));
+    log.append(p);
+    while (log.children.length > 9) log.firstChild.remove();
+    if (data.done) {
+      finished = true;
+      $("status").textContent = "trained. your CPU is idle now.";
+      ask();
+    } else {
+      $("status").textContent = "training on your device";
+      if (data.step % 3 === 0 || !finishedAsk) ask();
+    }
+  }
+  if (data.type === "answer" && data.id === askId) {
+    finishedAsk = true;
+    $("answer").textContent = data.answer ? $("q").value + data.answer : "...";
+    const bars = $("bars"); bars.textContent = "";
+    for (const [q, c] of data.top) {
+      const r = document.createElement("div"); r.className = "bar";
+      const a = document.createElement("span"); a.textContent = c === " " ? "_" : c === "\n" ? "↵" : c;
+      const w = document.createElement("div"), i = document.createElement("i"); i.style.width = Math.max(1, q * 100) + "%"; w.append(i);
+      const n = document.createElement("span"); n.textContent = Math.round(q * 100) + "%";
+      r.append(a, w, n); bars.append(r);
+    }
+  }
+};
+let finishedAsk = false;
+function ask() { worker.postMessage({ type: "ask", text: $("q").value, id: ++askId }); }
+$("q").addEventListener("input", ask);
+
+function fit(c) {
+  const r = c.getBoundingClientRect(), d = Math.min(devicePixelRatio || 1, 2);
+  if (r.width && c.width !== (r.width * d | 0)) { c.width = r.width * d; c.height = r.height * d; }
+  const g = c.getContext("2d"); g.setTransform(d, 0, 0, d, 0, 0); g.clearRect(0, 0, r.width, r.height);
+  return [g, r.width, r.height];
+}
+function drawLoss() {
+  const [g, w, h] = fit($("loss"));
+  if (losses.length < 2) return;
+  const lo = Math.log(Math.min(...losses, .04)), hi = Math.log(Math.max(...losses, 3.5));
+  g.strokeStyle = "#ff6b4a"; g.lineWidth = 1.6; g.beginPath();
+  losses.forEach((l, i) => { const x = i / (losses.length - 1) * w, y = h - 2 - (Math.log(l) - lo) / (hi - lo) * (h - 4); i ? g.lineTo(x, y) : g.moveTo(x, y); });
+  g.stroke();
+}
+function drawMap() {
+  if (!map) return;
+  const [g, w, h] = fit($("map"));
+  let maxX = .001, maxY = .001;
+  for (const [a, b] of map) { maxX = Math.max(maxX, Math.abs(a)); maxY = Math.max(maxY, Math.abs(b)); }
+  g.font = "14px ui-monospace,Menlo,monospace"; g.textAlign = "center"; g.textBaseline = "middle";
+  map.forEach(([a, b], i) => {
+    const c = chars[i], vowel = "aeiou".includes(c), label = c === " " ? "_" : c === "\n" ? "↵" : c;
+    g.fillStyle = vowel ? "#ff6b4a" : /[a-z]/.test(c) ? "#f4ecdf" : "#8ee6b0";
+    g.fillText(label, w / 2 + a / maxX * (w / 2 - 14), h / 2 + b / maxY * (h / 2 - 14));
+  });
+}
+document.addEventListener("visibilitychange", () => worker.postMessage({ type: document.hidden ? "pause" : "resume" }));
+let rt; addEventListener("resize", () => { clearTimeout(rt); rt = setTimeout(() => { drawLoss(); drawMap(); }, 120); });
+worker.postMessage({ type: "init", corpus: CORPUS });
+}
+</script>
+</body>
+</html>

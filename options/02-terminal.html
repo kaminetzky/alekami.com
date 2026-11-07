@@ -1,0 +1,204 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#020a04">
+<style>
+:root{--fg:#62ff8e;--dim:#2c9d50;--bg:#020a04;--glow:#22ff6655}
+body.amber{--fg:#ffb641;--dim:#a26b14;--bg:#0c0701;--glow:#ff9d1a55}
+body.ice{--fg:#7fe9ff;--dim:#2b86a0;--bg:#010a0e;--glow:#3cc8ff55}
+html,body{height:100%;margin:0;background:#000;overflow:hidden}
+body{color:var(--fg);font:15px/1.45 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+.crt{position:fixed;inset:0;background:radial-gradient(ellipse at center,color-mix(in srgb,var(--fg) 9%,var(--bg)),var(--bg) 72%);text-shadow:0 0 6px var(--glow)}
+.crt::before{content:"";position:absolute;inset:0;pointer-events:none;z-index:3;background:repeating-linear-gradient(0deg,#0000 0 2px,#00000055 2px 4px)}
+.crt::after{content:"";position:absolute;inset:0;pointer-events:none;z-index:4;background:radial-gradient(ellipse at center,#0000 58%,#000c 100%);animation:flick 5s steps(40) infinite}
+.bar{position:absolute;left:0;right:0;height:18%;top:-20%;z-index:2;pointer-events:none;background:linear-gradient(#fff0,#ffffff09,#fff0);animation:sweep 7s linear infinite}
+@keyframes sweep{to{top:110%}}
+@keyframes flick{0%,100%{opacity:1}48%{opacity:1}50%{opacity:.86}52%{opacity:1}}
+#out{position:absolute;inset:0;overflow-y:auto;padding:max(18px,env(safe-area-inset-top)) max(18px,3vw) 120px;scrollbar-width:none;overflow-wrap:anywhere}
+#out::-webkit-scrollbar{display:none}
+.l{white-space:pre-wrap;min-height:1.45em}
+.d{color:var(--dim)}
+a{color:inherit}
+pre.big{margin:8px 0 12px;line-height:1;letter-spacing:0;white-space:pre;overflow:hidden;font-family:inherit}
+.prompt{display:flex;gap:.6ch;align-items:baseline}
+.prompt span{flex:none}
+#in{flex:1;min-width:0;border:0;outline:0;background:none;color:inherit;font:inherit;font-size:16px;caret-color:var(--fg);text-shadow:inherit;padding:0}
+.chips{position:absolute;left:0;right:0;bottom:0;z-index:5;display:flex;gap:8px;overflow-x:auto;scrollbar-width:none;padding:10px max(18px,3vw) max(12px,env(safe-area-inset-bottom));background:linear-gradient(#0000,var(--bg) 40%)}
+.chips::-webkit-scrollbar{display:none}
+.chips button{flex:none;border:1px solid var(--dim);background:var(--bg);color:var(--fg);font:inherit;padding:7px 12px;cursor:pointer;text-shadow:inherit}
+.chips button:hover,.chips button:focus-visible{background:var(--fg);color:var(--bg);text-shadow:none}
+@media (prefers-reduced-motion:reduce){.bar,.crt::after{animation:none}}
+</style>
+</head>
+<body>
+<h1 style="position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)" id="sr"></h1>
+<div class="crt" id="crt">
+  <div class="bar"></div>
+  <div id="out" role="log" aria-live="polite"></div>
+  <div class="chips" id="chips"></div>
+</div>
+<script src="../config.js"></script>
+<script>
+const S = SITE, out = document.getElementById("out"), chips = document.getElementById("chips");
+document.getElementById("sr").textContent = S.full;
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+const host = S.alias, esc = s => s.replace(/[&<>]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+let promptEl, input, busy = true, skip = false;
+
+function line(html = "", cls = "") {
+  const d = document.createElement("div");
+  d.className = "l " + cls; d.innerHTML = html;
+  if (promptEl) out.insertBefore(d, promptEl); else out.append(d);
+  out.scrollTop = out.scrollHeight;
+  return d;
+}
+
+// Render text as block characters from a canvas, so it always follows config.js.
+function banner() {
+  const narrow = out.clientWidth < 720, lines = S.lines(narrow);
+  const pre = document.createElement("pre"); pre.className = "big"; pre.setAttribute("aria-hidden", "true");
+  const rowsPer = 11, c = document.createElement("canvas"), x = c.getContext("2d", { willReadFrequently: true });
+  const face = '900 ' + rowsPer * 1.25 + 'px "Arial Black",Arial,sans-serif', stretch = 1.5;
+  x.font = face;
+  const width = Math.ceil(Math.max(...lines.map(l => x.measureText(l).width)) * stretch) + 2;
+  c.width = width; c.height = rowsPer * lines.length;
+  const y = c.getContext("2d", { willReadFrequently: true });
+  y.font = face; y.textBaseline = "middle"; y.fillStyle = "#fff";
+  lines.forEach((l, i) => { y.setTransform(stretch, 0, 0, 1, 0, 0); y.fillText(l, 1, rowsPer * (i + .5)); });
+  const d = y.getImageData(0, 0, c.width, c.height).data;
+  let text = "";
+  for (let r = 0; r < c.height; r++) {
+    for (let k = 0; k < c.width; k++) text += d[(r * c.width + k) * 4 + 3] > 120 ? "█" : " ";
+    text += "\n";
+  }
+  const avail = out.clientWidth - parseFloat(getComputedStyle(out).paddingLeft) * 2;
+  pre.style.fontSize = Math.min(13, avail / (width * .602)) + "px";
+  pre.textContent = text;
+  out.insertBefore(pre, promptEl || null);
+}
+
+const link = (url, label) => '<a href="' + url + '" target="_blank" rel="me noopener">' + (label || url) + "</a>";
+const COMMANDS = {
+  help() {
+    line("available commands:");
+    [["whoami", "who runs this machine"], ["links", "where to find me"], ["github", "open github"], ["linkedin", "open linkedin"],
+     ["neofetch", "system info"], ["train", "train a very serious model"], ["ls", "list files"], ["theme", "change phosphor color"], ["clear", "clear screen"]]
+      .forEach(([c, d]) => line("  " + c.padEnd(10) + '<span class="d">' + d + "</span>"));
+  },
+  whoami() { line(esc(S.full)); line('<span class="d">' + S.roles.join(" · ") + "</span>"); },
+  links() { line("github    " + link(S.github)); line("linkedin  " + link(S.linkedin)); },
+  github() { line("opening " + link(S.github)); window.open(S.github, "_blank", "noopener"); },
+  linkedin() { line("opening " + link(S.linkedin)); window.open(S.linkedin, "_blank", "noopener"); },
+  ls() { line("about.txt   links.txt   secrets/   <span class=d>weights.pt</span>"); },
+  cat(a) {
+    if (a === "about.txt") COMMANDS.whoami();
+    else if (a === "links.txt") COMMANDS.links();
+    else if (a === "weights.pt") line("binary file. it is mostly vibes.");
+    else line("cat: " + esc(a || "") + ": try about.txt");
+  },
+  neofetch() {
+    const ua = navigator.userAgent, os = /Mac/.test(ua) ? "macOS" : /Win/.test(ua) ? "Windows" : /Android/.test(ua) ? "Android" : /iPhone|iPad/.test(ua) ? "iOS" : "Linux";
+    [["user", S.alias + "@" + host], ["role", S.role], ["guest os", os], ["cores", navigator.hardwareConcurrency || "?"],
+     ["screen", screen.width + "x" + screen.height], ["uptime", Math.round(performance.now() / 1000) + "s"], ["vibes", "immaculate"]]
+      .forEach(([k, v]) => line('<span class="d">' + k.padEnd(10) + "</span>" + esc(String(v))));
+  },
+  async train() {
+    busy = true;
+    let loss = 2.4;
+    for (let e = 1; e <= 12; e++) {
+      loss *= .68 + Math.random() * .1;
+      const n = Math.round(e / 12 * 24);
+      line("epoch " + String(e).padStart(2, "0") + "/12 [" + "#".repeat(n) + ".".repeat(24 - n) + "] loss " + loss.toFixed(4));
+      await sleep(130);
+    }
+    line("done. model converged. nobody knows why.");
+    busy = false;
+  },
+  sudo() { line("nice try. this incident will be reported to " + esc(S.first) + "."); },
+  rm() { line("rm: permission denied. nice try."); },
+  theme() {
+    const t = ["", "amber", "ice"], i = (t.indexOf(document.body.className) + 1) % 3;
+    document.body.className = t[i];
+    line("phosphor: " + (t[i] || "green"));
+  },
+  clear() { [...out.children].forEach(c => { if (c !== promptEl) c.remove(); }); },
+  exit() { line("there is no exit. only github."); },
+  vim() { line("you are now trapped. just kidding, this terminal has mercy."); },
+};
+
+async function run(raw) {
+  const value = raw.trim();
+  line('<span class="d">' + S.alias + "@web:~$</span> " + esc(value));
+  if (!value) return;
+  const [cmd, ...rest] = value.split(/\s+/), fn = COMMANDS[cmd.toLowerCase()];
+  if (fn) await fn(rest[0]);
+  else line(esc(cmd) + ': command not found. type <a href="#" data-run="help">help</a>');
+  line();
+}
+
+function makePrompt() {
+  promptEl = document.createElement("div"); promptEl.className = "prompt";
+  promptEl.innerHTML = '<span class="d">' + S.alias + '@web:~$</span><input id="in" aria-label="Terminal command" autocomplete="off" autocapitalize="off" spellcheck="false">';
+  out.append(promptEl);
+  input = promptEl.querySelector("input");
+  const history = []; let h = 0;
+  input.addEventListener("keydown", async e => {
+    if (e.key === "Enter" && !busy) {
+      const v = input.value; input.value = "";
+      if (v.trim()) { history.push(v); h = history.length; }
+      await run(v);
+      out.scrollTop = out.scrollHeight;
+    } else if (e.key === "ArrowUp") { h = Math.max(0, h - 1); input.value = history[h] || ""; e.preventDefault(); }
+    else if (e.key === "ArrowDown") { h = Math.min(history.length, h + 1); input.value = history[h] || ""; e.preventDefault(); }
+    else if (e.key === "l" && e.ctrlKey) { e.preventDefault(); COMMANDS.clear(); }
+    e.stopPropagation();
+  });
+}
+
+async function typed(cmd) {
+  input.value = "";
+  for (const ch of cmd) { input.value += ch; if (!skip) await sleep(55); }
+  await sleep(skip ? 0 : 160);
+  input.value = "";
+  await run(cmd);
+}
+
+["help", "links", "github", "linkedin", "neofetch", "train", "theme", "clear"].forEach(c => {
+  const b = document.createElement("button"); b.textContent = c;
+  b.onclick = async () => { if (!busy) { await run(c); out.scrollTop = out.scrollHeight; } };
+  chips.append(b);
+});
+out.addEventListener("click", async e => {
+  const r = e.target.dataset && e.target.dataset.run;
+  if (r) { e.preventDefault(); if (!busy) await run(r); }
+  else if (!getSelection().toString() && e.target.tagName !== "A" && matchMedia("(hover:hover)").matches) input && input.focus();
+});
+
+S.ready(async function boot() {
+  const still = matchMedia("(prefers-reduced-motion: reduce)").matches;
+  addEventListener("keydown", () => skip = true, { once: true });
+  addEventListener("pointerdown", () => skip = true, { once: true });
+  const log = ["BIOS v3.14 (c) " + S.alias + " systems", "checking memory .......... 640K ought to be enough", "detecting gpu ............ thirsty",
+    "mounting /dev/ideas ...... ok", "loading weights .......... ok", "loading caffeine ......... ok", "calibrating gradients .... descending",
+    "starting shell ............ ok"];
+  if (!still) for (const l of log) {
+    line(l.replace(/(ok|thirsty|descending|not found)$/, '<span style="font-weight:700">$1</span>'), "d");
+    if (!skip) await sleep(70 + Math.random() * 120);
+  }
+  if (!still && !skip) await sleep(250);
+  if (!still) COMMANDS.clear();
+  banner();
+  line("This terminal works. Go ahead, type something.", "d");
+  line();
+  makePrompt();
+  await typed("whoami"); await typed("links");
+  line('<span class="d">type</span> help <span class="d">or tap a command below</span>');
+  line();
+  busy = false;
+  if (matchMedia("(hover:hover)").matches) input.focus();
+});
+</script>
+</body>
+</html>

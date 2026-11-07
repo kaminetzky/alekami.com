@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0a1724">
+<style>
+*{box-sizing:border-box}
+html,body{height:100%;margin:0;background:#0a1724;color:#e8eef5;overflow:hidden;font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif}
+canvas{position:fixed;inset:0;width:100%;height:100%;display:block}
+.card{position:fixed;left:max(14px,env(safe-area-inset-left));top:max(14px,env(safe-area-inset-top));width:min(290px,calc(100% - 28px));background:#0e1f2fee;border:1px solid #ffffff1a;border-radius:10px;padding:12px 14px;box-shadow:0 8px 30px #0008}
+.cs{display:flex;align-items:baseline;justify-content:space-between;gap:8px}
+.cs b{font-size:20px;letter-spacing:.04em;color:#ffd400}
+.cs span{font-size:11px;color:#8ea3b8}
+.who{margin:2px 0 10px;font-size:13px;color:#cfdae6}
+.grid{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;font-variant-numeric:tabular-nums}
+.grid div{background:#ffffff0a;border-radius:6px;padding:5px 6px}
+.grid i{display:block;font-style:normal;font-size:9px;color:#8ea3b8;letter-spacing:.08em}
+.grid em{font-style:normal;font-size:13px;font-weight:600}
+.legend{margin-top:9px;height:6px;border-radius:3px;background:linear-gradient(90deg,#1affc7,#476bff,#ff4da3,#ffd173)}
+.lg{display:flex;justify-content:space-between;font-size:9px;color:#8ea3b8;margin-top:3px}
+.links{position:fixed;left:50%;transform:translateX(-50%);bottom:max(16px,env(safe-area-inset-bottom));display:flex;gap:10px}
+a{color:#0a1724;background:#ffd400;padding:10px 18px;border-radius:7px;text-decoration:none;font-weight:700;font-size:14px}
+a+a{background:#e8eef5}
+a:hover,a:focus-visible{background:#fff}
+@media (max-width:560px){.who{margin-bottom:6px}.grid em{font-size:12px}}
+</style>
+</head>
+<body>
+<canvas id="c" role="img" aria-label="A flight tracking map. A small plane's GPS track writes this person's name across the map, coloured by altitude."></canvas>
+<div class="card">
+  <div class="cs"><b id="cs"></b><span>C172 · Cessna Skyhawk</span></div>
+  <div class="who" id="who"></div>
+  <div class="grid">
+    <div><i>ALT FT</i><em id="alt">0</em></div><div><i>GS KT</i><em id="gs">0</em></div><div><i>HDG</i><em id="hdg">0</em></div><div><i>TRACK ART</i><em id="pct">0%</em></div>
+  </div>
+  <div class="legend"></div><div class="lg"><span>1,500 ft</span><span>altitude</span><span>6,500 ft</span></div>
+</div>
+<div class="links"><a id="gh" rel="me noopener">GitHub</a><a id="li" rel="me noopener">LinkedIn</a></div>
+<script src="../config.js"></script>
+<script src="letters.js"></script>
+<script>
+{
+const S = SITE, $ = id => document.getElementById(id);
+$("cs").textContent = S.alias.toUpperCase(); $("who").textContent = S.full + " · " + S.role;
+$("gh").href = S.github; $("li").href = S.linkedin;
+const c = $("c"), x = c.getContext("2d");
+const still = matchMedia("(prefers-reduced-motion: reduce)").matches;
+// The same mint, blue, pink and gold ramp as the loss landscape, mapped to altitude.
+const STOPS = [[.1, 1, .78], [.28, .42, 1], [1, .3, .64], [1, .82, .45]];
+const ramp = t => { t = Math.max(0, Math.min(.999, t)) * 3; const i = t | 0, f = t - i, a = STOPS[i], b = STOPS[i + 1]; return "rgb(" + [0, 1, 2].map(k => (a[k] + (b[k] - a[k]) * f) * 255 | 0) + ")"; };
+let W, H, dpr, map, track, tg, pts = [], idx = 0, heading = 0, doneAt = -1, fade = 1;
+
+// A made-up coastline from layered noise, drawn once per size.
+function noise(seed) {
+  const r = (i, j) => { const s = Math.sin(i * 127.1 + j * 311.7 + seed) * 43758.5453; return s - Math.floor(s); };
+  return (u, v) => { const i = Math.floor(u), j = Math.floor(v), fu = u - i, fv = v - j, su = fu * fu * (3 - 2 * fu), sv = fv * fv * (3 - 2 * fv);
+    return r(i, j) * (1 - su) * (1 - sv) + r(i + 1, j) * su * (1 - sv) + r(i, j + 1) * (1 - su) * sv + r(i + 1, j + 1) * su * sv; };
+}
+function buildMap() {
+  map = document.createElement("canvas"); map.width = W * dpr; map.height = H * dpr;
+  const m = map.getContext("2d"), n = noise(4.2), LW = 220, LH = Math.round(220 * H / W);
+  const lo = document.createElement("canvas"); lo.width = LW; lo.height = LH;
+  const lg = lo.getContext("2d"), img = lg.createImageData(LW, LH);
+  for (let j = 0; j < LH; j++) for (let i = 0; i < LW; i++) {
+    let v = 0, a = .5, f = 1 / 36;
+    for (let o = 0; o < 5; o++) { v += n(i * f, j * f) * a; a /= 2; f *= 2; }
+    v += (i / LW - .5) * .25;
+    const col = v > .56 ? [27, 40, 49] : v > .53 ? [34, 52, 63] : v > .49 ? [14, 32, 48] : [10, 23, 36], o = (j * LW + i) * 4;
+    img.data[o] = col[0]; img.data[o + 1] = col[1]; img.data[o + 2] = col[2]; img.data[o + 3] = 255;
+  }
+  lg.putImageData(img, 0, 0);
+  m.imageSmoothingEnabled = true; m.drawImage(lo, 0, 0, map.width, map.height);
+  m.setTransform(dpr, 0, 0, dpr, 0, 0);
+  // Graticule and a few airfields.
+  m.strokeStyle = "#ffffff0c"; m.lineWidth = 1;
+  for (let gx = 40; gx < W; gx += 110) { m.beginPath(); m.moveTo(gx, 0); m.lineTo(gx, H); m.stroke(); }
+  for (let gy = 40; gy < H; gy += 110) { m.beginPath(); m.moveTo(0, gy); m.lineTo(W, gy); m.stroke(); }
+  m.font = "10px ui-monospace,Menlo,monospace"; m.fillStyle = "#8ea3b888";
+  [[.15, .82, "KAMI"], [.78, .2, "KALX"], [.88, .78, "KZTY"]].forEach(([u, v, name]) => {
+    const ax = u * W, ay = v * H;
+    m.strokeStyle = "#8ea3b8aa"; m.beginPath(); m.arc(ax, ay, 6, 0, 6.3); m.stroke();
+    m.beginPath(); m.moveTo(ax - 5, ay + 4); m.lineTo(ax + 5, ay - 4); m.stroke();
+    m.fillText(name, ax + 9, ay + 3);
+  });
+}
+// The name as one continuous flight path, scaled to fit the map.
+function layout() {
+  W = innerWidth; H = innerHeight; dpr = Math.min(devicePixelRatio || 1, 2);
+  c.width = W * dpr; c.height = H * dpr;
+  buildMap();
+  track = document.createElement("canvas"); track.width = W * dpr; track.height = H * dpr;
+  tg = track.getContext("2d"); tg.setTransform(dpr, 0, 0, dpr, 0, 0); tg.lineCap = tg.lineJoin = "round";
+  const narrow = W / H < 1, p = LETTERS.path(S.lines(narrow), .25), top = narrow ? H * .3 : H * .26, bottom = H - 80;
+  const k = Math.min(W * .86 / p.width, (bottom - top) * .8 / p.height), cy = (top + bottom) / 2;
+  pts = p.pts.map(([a, b, down], i) => ({ x: W / 2 + a * k, y: cy - b * k, down, alt: 4000 + 1700 * Math.sin(i / p.pts.length * 6.2832 * 2.2) + 500 * Math.sin(i * .045) }));
+  idx = 0; doneAt = -1; fade = 1;
+}
+function drawSegment(i) {
+  const a = pts[i - 1], b = pts[i];
+  if (b.down && a.down) {
+    const col = ramp((b.alt - 1500) / 5000);
+    tg.strokeStyle = col; tg.globalAlpha = .18; tg.lineWidth = 9; tg.beginPath(); tg.moveTo(a.x, a.y); tg.lineTo(b.x, b.y); tg.stroke();
+    tg.globalAlpha = 1; tg.lineWidth = 3; tg.beginPath(); tg.moveTo(a.x, a.y); tg.lineTo(b.x, b.y); tg.stroke();
+  } else if (i % 6 < 3) {
+    // Pen-up legs between letters are part of the flight too, drawn faint and dashed.
+    tg.strokeStyle = "#ffffff40"; tg.lineWidth = 1; tg.beginPath(); tg.moveTo(a.x, a.y); tg.lineTo(b.x, b.y); tg.stroke();
+  }
+}
+// Flightradar-style aircraft icon.
+function aircraft(px, py, ang) {
+  x.save(); x.translate(px, py); x.rotate(ang); x.scale(1.1, 1.1);
+  x.shadowColor = "#0009"; x.shadowBlur = 6; x.shadowOffsetY = 3;
+  x.fillStyle = "#ffd400"; x.beginPath();
+  x.moveTo(12, 0); x.lineTo(9, -1.6); x.lineTo(2, -1.8); x.lineTo(-2, -11); x.lineTo(-5, -11); x.lineTo(-3, -2); x.lineTo(-9, -2); x.lineTo(-11, -5); x.lineTo(-13, -5);
+  x.lineTo(-12, 0); x.lineTo(-13, 5); x.lineTo(-11, 5); x.lineTo(-9, 2); x.lineTo(-3, 2); x.lineTo(-5, 11); x.lineTo(-2, 11); x.lineTo(2, 1.8); x.lineTo(9, 1.6); x.closePath(); x.fill();
+  x.restore();
+}
+let uiAt = 0;
+function step(dt, t) {
+  const rate = pts.length / 34; // the whole name in about 34 seconds
+  const target = Math.min(pts.length - 1, idx + rate * dt);
+  for (let i = Math.floor(idx) + 1; i <= Math.floor(target); i++) drawSegment(i);
+  idx = target;
+  if (idx >= pts.length - 1 && doneAt < 0) doneAt = t;
+  // When finished, admire it for a while, then fade it out and fly it again.
+  if (doneAt >= 0 && t - doneAt > 9) { fade -= dt / 1.5; if (fade <= 0) { tg.setTransform(1, 0, 0, 1, 0, 0); tg.clearRect(0, 0, track.width, track.height); tg.setTransform(dpr, 0, 0, dpr, 0, 0); idx = 0; doneAt = -1; fade = 1; } }
+}
+function draw(t) {
+  x.setTransform(1, 0, 0, 1, 0, 0);
+  x.drawImage(map, 0, 0);
+  x.globalAlpha = fade; x.drawImage(track, 0, 0); x.globalAlpha = 1;
+  x.setTransform(dpr, 0, 0, dpr, 0, 0);
+  const i = Math.floor(idx), f = idx - i, a = pts[i], b = pts[Math.min(pts.length - 1, i + 1)], ahead = pts[Math.min(pts.length - 1, i + 4)];
+  const px = a.x + (b.x - a.x) * f, py = a.y + (b.y - a.y) * f, want = Math.atan2(ahead.y - a.y, ahead.x - a.x);
+  if (ahead !== a) heading += Math.atan2(Math.sin(want - heading), Math.cos(want - heading)) * .15;
+  if (fade > 0) aircraft(px, py, heading);
+  if (t - uiAt > .15) {
+    uiAt = t;
+    $("alt").textContent = Math.round(a.alt / 10) * 10 + "";
+    $("gs").textContent = 118 + Math.round(Math.sin(t * .3) * 4) + "";
+    $("hdg").textContent = String(Math.round(((heading * 180 / Math.PI + 90) % 360 + 360) % 360)).padStart(3, "0") + "°";
+    $("pct").textContent = Math.round(idx / (pts.length - 1) * 100) + "%";
+  }
+}
+let last = 0, clock = 0;
+function frame(now) {
+  requestAnimationFrame(frame);
+  if (document.hidden) { last = now; return; }
+  const dt = Math.min(.05, (now - last) / 1000); last = now; clock += dt;
+  step(dt, clock); draw(clock);
+}
+addEventListener("resize", () => { layout(); if (still) finish(); });
+function finish() { for (let i = 1; i < pts.length; i++) drawSegment(i); idx = pts.length - 1; draw(0); }
+S.ready(() => { layout(); if (still) finish(); else requestAnimationFrame(frame); });
+}
+</script>
+</body>
+</html>

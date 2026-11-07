@@ -1,0 +1,219 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+*{box-sizing:border-box}
+html,body{margin:0;background:#08090c;color:#eef0f3;font:14px/1.4 ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif}
+main{max-width:1280px;margin:auto;padding:20px clamp(16px,3vw,32px) 40px}
+header{display:flex;justify-content:space-between;align-items:center;gap:16px;flex-wrap:wrap;margin-bottom:18px}
+h1{margin:0;font-size:22px}
+header p{margin:2px 0 0;color:#9aa1ad}
+label.btn{display:inline-block;padding:11px 18px;background:#6dff94;color:#04140a;font-weight:700;cursor:pointer;border-radius:8px}
+label.btn:hover,label.btn:focus-within{background:#fff}
+input[type=file]{position:absolute;opacity:0;width:1px;height:1px}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,340px),1fr));gap:14px}
+figure{margin:0;background:#000;border:1px solid #23262d;border-radius:10px;overflow:hidden}
+canvas{display:block;width:100%;aspect-ratio:1;background:#000}
+figcaption{padding:9px 12px;color:#9aa1ad;border-top:1px solid #23262d}
+figcaption b{color:#eef0f3;font-weight:600;margin-right:6px}
+body.drag main{outline:2px dashed #6dff94;outline-offset:-8px}
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <div><h1>Photo lab</h1><p>Placeholder mannequin shown. Your photo stays in this browser and is never uploaded.</p></div>
+    <label class="btn">Try my photo<input type="file" id="file" accept="image/*"></label>
+  </header>
+  <div class="grid" id="grid"></div>
+</main>
+<script>
+const SIZE = 480, N = 128;
+const TREATMENTS = [
+  ["Code face", "Matrix rain falling through your face", codeFace],
+  ["Detection", "Thermal view plus a YOLO style bounding box", detection],
+  ["Point cloud", "Luminance as depth, rotates with the pointer", cloud],
+  ["ASCII", "Plain text portrait with a scan line", ascii],
+  ["Halftone", "Comic print dots in hot colors", halftone],
+  ["Glitch", "Datamoshed slices and RGB split", glitch],
+];
+let lum = new Float32Array(N * N), pointer = [0, 0];
+const grid = document.getElementById("grid"), cards = [];
+for (const [title, sub, fn] of TREATMENTS) {
+  const f = document.createElement("figure"), c = document.createElement("canvas");
+  c.width = c.height = SIZE; f.append(c);
+  const cap = document.createElement("figcaption"); cap.innerHTML = "<b>" + title + "</b>" + sub; f.append(cap);
+  grid.append(f);
+  cards.push({ c, x: c.getContext("2d"), fn, visible: false });
+}
+const io = new IntersectionObserver(es => es.forEach(e => { cards.find(k => k.c === e.target).visible = e.isIntersecting; }));
+cards.forEach(k => io.observe(k.c));
+
+// Neutral mannequin so the treatments have something to show before a photo is chosen.
+function mannequin() {
+  const c = document.createElement("canvas"); c.width = c.height = 256;
+  const x = c.getContext("2d");
+  x.fillStyle = "#0c0c0c"; x.fillRect(0, 0, 256, 256);
+  let g = x.createRadialGradient(100, 215, 10, 128, 260, 130);
+  g.addColorStop(0, "#9a9a9a"); g.addColorStop(1, "#202020");
+  x.fillStyle = g; x.beginPath(); x.ellipse(128, 262, 112, 76, 0, 0, 7); x.fill();
+  x.fillStyle = "#6a6a6a"; x.fillRect(106, 160, 44, 44);
+  g = x.createRadialGradient(108, 84, 8, 128, 104, 72);
+  g.addColorStop(0, "#f2f2f2"); g.addColorStop(.65, "#a8a8a8"); g.addColorStop(1, "#3e3e3e");
+  x.fillStyle = g; x.beginPath(); x.ellipse(128, 104, 54, 70, 0, 0, 7); x.fill();
+  x.fillStyle = "#1b1b1b"; x.beginPath(); x.ellipse(128, 48, 57, 28, 0, Math.PI, 0); x.fill();
+  x.fillStyle = "#2a2a2a";
+  for (const ex of [106, 150]) { x.beginPath(); x.ellipse(ex, 96, 11, 5, 0, 0, 7); x.fill(); }
+  x.fillStyle = "#777"; x.beginPath(); x.moveTo(128, 100); x.lineTo(120, 128); x.lineTo(134, 128); x.fill();
+  x.fillStyle = "#3c3c3c"; x.beginPath(); x.ellipse(128, 145, 19, 4, 0, 0, 7); x.fill();
+  load(c, 256, 256);
+}
+function load(img, w, h) {
+  const c = document.createElement("canvas"); c.width = c.height = N;
+  const x = c.getContext("2d", { willReadFrequently: true }), s = Math.min(w, h);
+  // Centre crop with a slight bias upward, where faces tend to be.
+  x.drawImage(img, (w - s) / 2, Math.max(0, (h - s) * .35), s, s, 0, 0, N, N);
+  const d = x.getImageData(0, 0, N, N).data;
+  let lo = 255, hi = 0;
+  const raw = new Float32Array(N * N);
+  for (let i = 0; i < N * N; i++) { const v = d[i * 4] * .3 + d[i * 4 + 1] * .59 + d[i * 4 + 2] * .11; raw[i] = v; if (v < lo) lo = v; if (v > hi) hi = v; }
+  for (let i = 0; i < N * N; i++) lum[i] = (raw[i] - lo) / (hi - lo || 1);
+  prepareCloud();
+}
+const sample = (u, v) => lum[Math.min(N - 1, v * N | 0) * N + Math.min(N - 1, u * N | 0)];
+
+const GLYPH = "ｱｲｳｴｵｶｷｸｹｺｻｼｽｾｿﾀﾁﾂﾃﾄ0123456789";
+function codeFace(x, t) {
+  const n = 46, cs = SIZE / n;
+  x.fillStyle = "#000"; x.fillRect(0, 0, SIZE, SIZE);
+  x.font = "bold " + (cs * 1.05) + "px ui-monospace,Menlo,monospace"; x.textBaseline = "top";
+  for (let i = 0; i < n; i++) {
+    const speed = .55 + ((i * 7919) % 13) / 13, head = ((t * speed * 12 + (i * 101) % n) % (n * 1.5));
+    for (let j = 0; j < n; j++) {
+      const l = Math.min(1, sample((i + .5) / n, (j + .5) / n) * 1.25), dist = (head - j + n * 1.5) % (n * 1.5), tail = Math.max(0, 1 - dist / 16);
+      const b = l * l * .95 + tail * .5 * (.25 + l);
+      if (b < .05) continue;
+      const g = 90 + b * 165 | 0;
+      x.fillStyle = dist < 1 ? "#eafff0" : "rgba(" + (b > .8 ? 170 : 10) + "," + g + "," + (b > .8 ? 180 : 60) + "," + Math.min(1, b + .12) + ")";
+      x.fillText(GLYPH[(i * 31 + j * 17 + (t * (1 + i % 3) | 0)) % GLYPH.length], i * cs, j * cs);
+    }
+  }
+}
+const INFERNO = [[0, 0, 12], [66, 10, 104], [147, 38, 103], [221, 81, 58], [252, 165, 10], [252, 255, 164]];
+function heat(v) {
+  const t = Math.max(0, Math.min(.999, v)) * 5, a = t | 0, f = t - a, p = INFERNO[a], q = INFERNO[a + 1];
+  return [p[0] + (q[0] - p[0]) * f, p[1] + (q[1] - p[1]) * f, p[2] + (q[2] - p[2]) * f];
+}
+const heatBuf = new ImageData(N, N), heatC = document.createElement("canvas"); heatC.width = heatC.height = N;
+function detection(x, t) {
+  const sweep = (t * .35) % 1.3;
+  for (let i = 0; i < N * N; i++) {
+    const row = (i / N | 0) / N, boost = Math.exp(-Math.pow((row - sweep) * 14, 2)) * .22;
+    const [r, g, b] = heat(lum[i] * .95 + boost), o = i * 4;
+    heatBuf.data[o] = r; heatBuf.data[o + 1] = g; heatBuf.data[o + 2] = b; heatBuf.data[o + 3] = 255;
+  }
+  heatC.getContext("2d").putImageData(heatBuf, 0, 0);
+  x.imageSmoothingEnabled = true; x.drawImage(heatC, 0, 0, SIZE, SIZE);
+  const j = Math.sin(t * 3) * 2.5, bx = SIZE * .21 + j, by = SIZE * .1 - j, bw = SIZE * .58, bh = SIZE * .62;
+  x.strokeStyle = "#6dff94"; x.lineWidth = 3; x.strokeRect(bx, by, bw, bh);
+  const conf = (.97 + Math.sin(t * 1.7) * .02).toFixed(2), label = "ml_engineer " + conf;
+  x.font = "bold 18px ui-monospace,Menlo,monospace"; x.textBaseline = "top";
+  x.fillStyle = "#6dff94"; x.fillRect(bx - 1.5, by - 25, x.measureText(label).width + 12, 25);
+  x.fillStyle = "#04140a"; x.fillText(label, bx + 5, by - 22);
+}
+let pts = [];
+function prepareCloud() {
+  pts = [];
+  for (let j = 0; j < 96; j++) for (let i = 0; i < 96; i++) {
+    const l = sample(i / 96, j / 96);
+    if (l > .1) pts.push([i / 96 - .5, j / 96 - .5, l]);
+  }
+}
+function cloud(x, t) {
+  x.fillStyle = "#04060c"; x.fillRect(0, 0, SIZE, SIZE);
+  const a = Math.sin(t * .6) * .5 + pointer[0] * .7, ca = Math.cos(a), sa = Math.sin(a), b = pointer[1] * .4, cb = Math.cos(b), sb = Math.sin(b);
+  for (const [u, v, l] of pts) {
+    const z = (l - .45) * .42 + Math.sin(v * 22 + t * 2.4) * .006;
+    const rx = u * ca + z * sa, rz0 = -u * sa + z * ca, ry = v * cb - rz0 * sb, rz = v * sb + rz0 * cb, p = 1.15 / (1.6 - rz);
+    const s = 1 + l * 1.5;
+    x.fillStyle = "rgba(" + (70 + l * 185 | 0) + "," + (190 + l * 65 | 0) + ",255," + (.25 + l * .75) + ")";
+    x.fillRect(SIZE / 2 + rx * p * SIZE - s / 2, SIZE / 2 + ry * p * SIZE - s / 2, s, s);
+  }
+}
+const RAMP = " .:-=+*#%@";
+function ascii(x, t) {
+  const n = 58, cw = SIZE / n;
+  x.fillStyle = "#050300"; x.fillRect(0, 0, SIZE, SIZE);
+  x.font = (cw * 1.5) + "px ui-monospace,Menlo,monospace"; x.textBaseline = "top";
+  const scan = (t * 16) % (n * 1.3);
+  for (let j = 0; j < n; j += 1) {
+    const hot = Math.abs(j - scan) < 2;
+    x.fillStyle = hot ? "#fff3c9" : "#ffb641";
+    let s = "";
+    for (let i = 0; i < n; i++) s += RAMP[Math.min(9, sample((i + .5) / n, (j + .5) / n) * 10 | 0)];
+    if (j % 2 === 0) x.fillText(s, 0, j * cw, SIZE);
+    else if (hot) x.fillText(s, 0, j * cw, SIZE);
+  }
+}
+function halftone(x, t) {
+  x.fillStyle = "#fff7e6"; x.fillRect(0, 0, SIZE, SIZE);
+  const sp = 10.5, o = Math.sin(t * .8) * 2.2;
+  x.globalCompositeOperation = "multiply";
+  for (const [color, dx, dy, angle] of [["#ff2e88", o, 0, .26], ["#00c8ff", -o, 1, -.26], ["#111", 0, 0, .78]]) {
+    x.fillStyle = color; x.beginPath();
+    const ca = Math.cos(angle), sa = Math.sin(angle), weight = color === "#111" ? .72 : 1;
+    for (let a = -SIZE / sp; a < SIZE / sp * 1.5; a++) for (let b = -SIZE / sp; b < SIZE / sp * 1.5; b++) {
+      const px = (a * ca - b * sa) * sp + dx, py = (a * sa + b * ca) * sp + dy;
+      if (px < -sp || py < -sp || px > SIZE + sp || py > SIZE + sp) continue;
+      const r = (1 - sample(Math.max(0, px / SIZE), Math.max(0, py / SIZE))) * sp * .66 * weight;
+      if (r < .4) continue;
+      x.moveTo(px + r, py); x.arc(px, py, r, 0, 6.283);
+    }
+    x.fill();
+  }
+  x.globalCompositeOperation = "source-over";
+}
+const gBuf = new ImageData(N, N), gC = document.createElement("canvas"); gC.width = gC.height = N;
+function glitch(x, t) {
+  const burst = Math.sin(t * 1.6) > .55 || Math.sin(t * 7.3) > .92, seed = t * 12 | 0;
+  for (let j = 0; j < N; j++) {
+    const band = (j >> 3) + seed, off = burst && ((band * 2654435761) >>> 28) > 10 ? (((band * 40503) >>> 8) % 42) - 21 : 0;
+    for (let i = 0; i < N; i++) {
+      const o = (j * N + i) * 4, at = k => lum[j * N + ((i + off + k + N) % N)];
+      gBuf.data[o] = at(burst ? 4 : 2) * 255; gBuf.data[o + 1] = at(0) * 235; gBuf.data[o + 2] = at(burst ? -4 : -2) * 255; gBuf.data[o + 3] = 255;
+    }
+  }
+  gC.getContext("2d").putImageData(gBuf, 0, 0);
+  x.imageSmoothingEnabled = false; x.drawImage(gC, 0, 0, SIZE, SIZE);
+  x.fillStyle = "rgba(0,0,0,.28)";
+  for (let j = 0; j < SIZE; j += 4) x.fillRect(0, j, SIZE, 2);
+}
+
+const still = matchMedia("(prefers-reduced-motion: reduce)").matches;
+let last = 0;
+function tick(ms) {
+  if (!still) requestAnimationFrame(tick);
+  if (ms - last < 40 || document.hidden) return;
+  last = ms;
+  for (const k of cards) if (k.visible || still) k.fn(k.x, ms / 1000);
+}
+addEventListener("pointermove", e => { pointer = [e.clientX / innerWidth * 2 - 1, e.clientY / innerHeight * 2 - 1]; }, { passive: true });
+
+function useFile(file) {
+  if (!file || !file.type.startsWith("image/")) return;
+  const url = URL.createObjectURL(file), img = new Image();
+  img.onload = () => { load(img, img.naturalWidth, img.naturalHeight); URL.revokeObjectURL(url); };
+  img.src = url;
+}
+document.getElementById("file").onchange = e => useFile(e.target.files[0]);
+addEventListener("dragover", e => { e.preventDefault(); document.body.classList.add("drag"); });
+addEventListener("dragleave", () => document.body.classList.remove("drag"));
+addEventListener("drop", e => { e.preventDefault(); document.body.classList.remove("drag"); useFile(e.dataTransfer.files[0]); });
+
+mannequin();
+requestAnimationFrame(tick);
+</script>
+</body>
+</html>

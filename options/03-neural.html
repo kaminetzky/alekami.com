@@ -1,0 +1,294 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#07040c">
+<style>
+:root{--fg:#ffe9c9;--dim:#a2849a;--hot:#ff8a2a;--line:#ffffff1c}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0;background:#07040c;color:var(--fg);font:13px/1.4 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+body{display:grid;grid-template-rows:auto minmax(0,1fr) auto;height:100dvh;padding:max(14px,env(safe-area-inset-top)) clamp(14px,3vw,36px) max(14px,env(safe-area-inset-bottom));gap:12px;
+ background-image:linear-gradient(var(--line) 1px,#0000 1px),linear-gradient(90deg,var(--line) 1px,#0000 1px);background-size:44px 44px;background-position:center}
+header{display:flex;justify-content:space-between;gap:12px;align-items:baseline;color:var(--dim)}
+h1{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}
+.status{color:var(--hot);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+header span:first-child{flex:none}
+.hero{position:relative;min-height:0;display:flex;align-items:center;justify-content:center}
+#out{width:100%;height:100%;display:block;image-rendering:auto;filter:drop-shadow(0 0 22px #ff6a1a66)}
+.hud{display:grid;grid-template-columns:minmax(0,1.2fr) minmax(0,1fr) minmax(0,1.2fr);gap:12px}
+.card{border:1px solid var(--line);background:#0d0814d9;padding:10px 12px;min-width:0;height:128px;display:flex;flex-direction:column;gap:6px}
+.card h2{margin:0;font-size:11px;font-weight:400;color:var(--dim);letter-spacing:.12em;text-transform:uppercase;display:flex;justify-content:space-between;gap:8px}
+.card h2 b{color:var(--fg);font-weight:600;letter-spacing:0}
+.card canvas{flex:1;min-height:0;width:100%;display:block}
+.about{justify-content:space-between;height:auto;min-height:128px}
+.about p{margin:0;font-size:12px;color:var(--dim)}
+.about strong{color:var(--fg);font-weight:600;font-size:14px;display:block}
+.acts{display:flex;gap:8px;flex-wrap:wrap}
+a,button{font:inherit;color:#07040c;background:var(--hot);border:0;padding:6px 12px;text-decoration:none;cursor:pointer;font-weight:700}
+a:hover,button:hover,a:focus-visible,button:focus-visible{background:var(--fg)}
+button{background:none;color:var(--fg);border:1px solid var(--dim);font-weight:400}
+button:hover{color:#07040c}
+@media (max-width:760px){
+ .hud{grid-template-columns:1fr 1fr}
+ .about{grid-column:1/-1;order:-1;height:auto;gap:8px}
+ .card{height:92px}.about.card{height:auto}
+ .net{display:flex}
+}
+</style>
+</head>
+<body>
+<h1 id="sr"></h1>
+<header><span>live_training.ipynb</span><span class="status" id="status">initialising weights</span></header>
+<div class="hero"><canvas id="out" role="img" aria-label="A neural network learning to draw this person's name"></canvas></div>
+<div class="hud">
+  <div class="card about">
+    <div><strong id="who"></strong><p>This is not an image. A <span id="params"></span> parameter network is training on your device right now, with no server.</p></div>
+    <div class="acts"><a id="gh" rel="me noopener">GitHub</a><a id="li" rel="me noopener">LinkedIn</a><button id="reset">Reset weights</button></div>
+  </div>
+  <div class="card"><h2>Loss <b id="loss">...</b></h2><canvas id="curve"></canvas></div>
+  <div class="card net"><h2>Weights <b id="steps">0 steps</b></h2><canvas id="weights"></canvas></div>
+</div>
+<script src="../config.js"></script>
+<script id="wk" type="text/plain">
+// Random Fourier features -> 2 ReLU layers -> sigmoid. Plain Float32Arrays and hand written backprop.
+const NF = 48, F = NF * 2, A = 48, B = 48, LR = .004;
+const SIZE = F * A + A + A * B + B + B + 1;
+const iW1 = 0, iB1 = F * A, iW2 = iB1 + A, iB2 = iW2 + A * B, iW3 = iB2 + B, iB3 = iW3 + B;
+let p = new Float32Array(SIZE), m = new Float32Array(SIZE), v = new Float32Array(SIZE), g = new Float32Array(SIZE);
+let W, H, feats, target, on = [], step = 0, adamT = 0, running = false, gen = 0, ema = null, sinceSwitch = 0;
+const a1 = new Float32Array(A), a2 = new Float32Array(B), d1 = new Float32Array(A), d2 = new Float32Array(B);
+const gauss = () => Math.sqrt(-2 * Math.log(1 - Math.random())) * Math.cos(6.2832 * Math.random());
+
+function initWeights() {
+  for (let i = 0; i < F * A; i++) p[iW1 + i] = gauss() * Math.sqrt(2 / F);
+  for (let i = 0; i < A * B; i++) p[iW2 + i] = gauss() * Math.sqrt(2 / A);
+  for (let i = 0; i < B; i++) p[iW3 + i] = gauss() * Math.sqrt(1 / B);
+  for (const k of [iB1, iB2]) p.fill(0, k, k + (k === iB1 ? A : B));
+  p[iB3] = -1;
+  m.fill(0); v.fill(0); adamT = 0; step = 0; ema = null; sinceSwitch = 0;
+}
+
+function forward(f, o) {
+  for (let i = 0; i < A; i++) {
+    let s = p[iB1 + i]; const r = iW1 + i * F;
+    for (let j = 0; j < F; j++) s += p[r + j] * f[o + j];
+    a1[i] = s > 0 ? s : 0;
+  }
+  for (let i = 0; i < B; i++) {
+    let s = p[iB2 + i]; const r = iW2 + i * A;
+    for (let j = 0; j < A; j++) s += p[r + j] * a1[j];
+    a2[i] = s > 0 ? s : 0;
+  }
+  let y = p[iB3];
+  for (let i = 0; i < B; i++) y += p[iW3 + i] * a2[i];
+  return y;
+}
+
+function trainBatch(n) {
+  g.fill(0);
+  let loss = 0;
+  for (let k = 0; k < n; k++) {
+    // Half the batch comes from ink pixels because text is sparse.
+    const px = (k & 1) && on.length ? on[Math.random() * on.length | 0] : Math.random() * W * H | 0;
+    const y = forward(feats, px * F), q = 1 / (1 + Math.exp(-y)), t = target[px], e = q - t;
+    loss += -(t * Math.log(q + 1e-6) + (1 - t) * Math.log(1 - q + 1e-6));
+    d1.fill(0);
+    g[iB3] += e;
+    for (let i = 0; i < B; i++) {
+      if (a2[i] <= 0) continue;
+      g[iW3 + i] += e * a2[i];
+      const de = e * p[iW3 + i], r = iW2 + i * A;
+      g[iB2 + i] += de;
+      for (let j = 0; j < A; j++) if (a1[j] > 0) {
+        g[r + j] += de * a1[j];
+        d1[j] += de * p[r + j];
+      }
+    }
+    for (let i = 0; i < A; i++) {
+      if (a1[i] <= 0) continue;
+      const de = d1[i], r = iW1 + i * F, o = px * F;
+      g[iB1 + i] += de;
+      for (let j = 0; j < F; j++) g[r + j] += de * feats[o + j];
+    }
+  }
+  adamT++;
+  const b1 = .9, b2 = .999, c1 = 1 - Math.pow(b1, adamT), c2 = 1 - Math.pow(b2, adamT);
+  for (let i = 0; i < SIZE; i++) {
+    const d = g[i] / n;
+    m[i] = b1 * m[i] + (1 - b1) * d;
+    v[i] = b2 * v[i] + (1 - b2) * d * d;
+    p[i] -= LR * (m[i] / c1) / (Math.sqrt(v[i] / c2) + 1e-8);
+  }
+  step++; sinceSwitch++;
+  return loss / n;
+}
+
+function render() {
+  const img = new Uint8ClampedArray(W * H);
+  for (let i = 0; i < W * H; i++) img[i] = 255 / (1 + Math.exp(-forward(feats, i * F)));
+  const sample = new Float32Array(120);
+  for (let i = 0; i < 120; i++) sample[i] = p[iW2 + (i * 37) % (A * B)];
+  postMessage({ img, loss: ema, step, sample, sinceSwitch }, [img.buffer, sample.buffer]);
+}
+
+function tick(id) {
+  if (!running || id !== gen) return;
+  const t0 = performance.now();
+  while (performance.now() - t0 < 220) {
+    const l = trainBatch(96);
+    ema = ema === null ? l : ema * .97 + l * .03;
+  }
+  render();
+  setTimeout(() => tick(id), 60); // leave the CPU some room between bursts
+}
+
+onmessage = ({ data }) => {
+  if (data.type === "init") {
+    W = data.W; H = data.H;
+    const aspect = W / H, s = data.sigma, freq = [];
+    for (let i = 0; i < NF; i++) freq.push([gauss() * s, gauss() * s]);
+    feats = new Float32Array(W * H * F);
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+      const u = (x / W - .5) * aspect, w = y / H - .5, o = (y * W + x) * F;
+      for (let i = 0; i < NF; i++) {
+        const t = 6.2832 * (freq[i][0] * u + freq[i][1] * w);
+        feats[o + i * 2] = Math.sin(t) * 1.41; feats[o + i * 2 + 1] = Math.cos(t) * 1.41;
+      }
+    }
+    initWeights();
+    postMessage({ params: SIZE });
+  }
+  if (data.type === "target") {
+    target = data.target; on = [];
+    for (let i = 0; i < W * H; i++) if (target[i] > .5) on.push(i);
+    ema = null; sinceSwitch = 0;
+  }
+  if (data.type === "reset") initWeights();
+  if (data.type === "run") {
+    gen++; running = data.on;
+    if (running) tick(gen);
+  }
+};
+</script>
+<script>
+const S = SITE, $ = id => document.getElementById(id);
+$("sr").textContent = S.full; $("who").textContent = S.full + " · " + S.role;
+$("gh").href = S.github; $("li").href = S.linkedin;
+S.ready(() => {
+const hero = document.querySelector(".hero"), canvas = $("out"), ctx = canvas.getContext("2d");
+const narrow = innerWidth < 760, box = hero.getBoundingClientRect();
+const ratio = Math.min(2.6, Math.max(.8, box.width / box.height));
+const W = narrow ? 84 : [90, 110, 132][S.tier()], H = Math.round(W / ratio);
+canvas.width = W; canvas.height = H;
+const imgData = ctx.createImageData(W, H);
+
+// Inferno style colour ramp.
+const STOPS = [[7, 4, 12], [50, 12, 92], [132, 28, 108], [214, 66, 62], [250, 150, 30], [255, 240, 190]];
+const LUT = new Uint8Array(768);
+for (let i = 0; i < 256; i++) {
+  const t = i / 255 * (STOPS.length - 1), a = Math.min(t | 0, STOPS.length - 2), f = t - a;
+  for (let c = 0; c < 3; c++) LUT[i * 3 + c] = STOPS[a][c] + (STOPS[a + 1][c] - STOPS[a][c]) * f;
+}
+
+function textMask(lines) {
+  const c = document.createElement("canvas"); c.width = W; c.height = H;
+  const x = c.getContext("2d", { willReadFrequently: true }), face = '900 100px "Arial Black","Helvetica Neue",Arial,sans-serif';
+  x.font = face;
+  const widest = Math.max(...lines.map(l => x.measureText(l).width));
+  const size = Math.min(100 * W * .92 / widest, H * .86 / lines.length);
+  x.font = face.replace("100px", size + "px");
+  x.textAlign = "center"; x.textBaseline = "middle"; x.fillStyle = "#fff";
+  const lh = size * 1.02;
+  lines.forEach((l, i) => x.fillText(l, W / 2, H / 2 + (i - (lines.length - 1) / 2) * lh));
+  const d = x.getImageData(0, 0, W, H).data, t = new Float32Array(W * H);
+  for (let i = 0; i < W * H; i++) t[i] = d[i * 4 + 3] / 255;
+  return t;
+}
+
+const TARGETS = [S.lines(narrow), [S.alias.toUpperCase()], narrow ? ["ML", "ENGINEER"] : ["ML ENGINEER"]];
+let targetIndex = 0, losses = [], holdUntil = 0, settled = false;
+const src = document.getElementById("wk").textContent;
+const worker = new Worker(URL.createObjectURL(new Blob([src], { type: "text/javascript" })));
+const setTarget = i => worker.postMessage({ type: "target", target: textMask(TARGETS[i]) });
+
+const curve = $("curve"), weights = $("weights");
+function fit(c) {
+  const r = c.getBoundingClientRect(), d = Math.min(devicePixelRatio || 1, 2);
+  if (c.width !== (r.width * d | 0)) { c.width = r.width * d; c.height = r.height * d; }
+  return c.getContext("2d");
+}
+function drawCurve() {
+  const x = fit(curve), w = curve.width, h = curve.height;
+  x.clearRect(0, 0, w, h);
+  if (losses.length < 2) return;
+  const max = Math.max(...losses), min = Math.min(...losses, .01);
+  x.beginPath();
+  losses.forEach((l, i) => {
+    const px = i / (losses.length - 1) * w, py = h - (Math.log(l) - Math.log(min)) / (Math.log(max) - Math.log(min) || 1) * (h - 4) - 2;
+    i ? x.lineTo(px, py) : x.moveTo(px, py);
+  });
+  x.strokeStyle = "#ff8a2a"; x.lineWidth = 1.5 * (devicePixelRatio > 1 ? 2 : 1); x.stroke();
+}
+function drawWeights(s) {
+  const x = fit(weights), w = weights.width, h = weights.height, cols = 30, rows = 4, cw = w / cols, ch = h / rows;
+  x.clearRect(0, 0, w, h);
+  for (let i = 0; i < s.length; i++) {
+    const v = Math.max(0, Math.min(255, 128 + s[i] * 90)) | 0;
+    x.fillStyle = "rgb(" + LUT[v * 3] + "," + LUT[v * 3 + 1] + "," + LUT[v * 3 + 2] + ")";
+    x.fillRect((i % cols) * cw, (i / cols | 0) * ch, cw - 1, ch - 1);
+  }
+}
+
+worker.onmessage = ({ data }) => {
+  if (data.params) { $("params").textContent = data.params.toLocaleString(); return; }
+  const px = imgData.data;
+  for (let i = 0; i < W * H; i++) {
+    const v = data.img[i], o = i * 4;
+    px[o] = LUT[v * 3]; px[o + 1] = LUT[v * 3 + 1]; px[o + 2] = LUT[v * 3 + 2];
+    px[o + 3] = 255 * Math.min(1, v / 40);
+  }
+  ctx.putImageData(imgData, 0, 0);
+  if (data.loss !== null) {
+    $("loss").textContent = data.loss.toFixed(4);
+    losses.push(data.loss); if (losses.length > 240) losses.shift();
+  }
+  $("steps").textContent = data.step.toLocaleString() + " steps";
+  drawCurve(); drawWeights(data.sample);
+  // Hold each result once the network has it, then move on to the next target.
+  const name = TARGETS[targetIndex].join(" ");
+  if (!holdUntil && data.sinceSwitch > 200 && (data.loss < .045 || data.sinceSwitch > 2200)) {
+    worker.postMessage({ type: "run", on: false });
+    $("status").textContent = "converged: " + name;
+    // After one full pass, settle on the name and stop computing entirely.
+    if (settled) { $("status").textContent = "training complete: " + name; return; }
+    holdUntil = setTimeout(() => {
+      holdUntil = 0;
+      targetIndex = (targetIndex + 1) % TARGETS.length;
+      if (targetIndex === 0) settled = true;
+      setTarget(targetIndex);
+      $("status").textContent = "learning: " + TARGETS[targetIndex].join(" ");
+      if (!document.hidden) worker.postMessage({ type: "run", on: true });
+    }, targetIndex === 0 ? 7000 : 3500);
+  }
+};
+
+const sigma = narrow ? 8 : 6.5;
+worker.postMessage({ type: "init", W, H, sigma });
+setTarget(0);
+$("status").textContent = "learning: " + TARGETS[0].join(" ");
+worker.postMessage({ type: "run", on: true });
+
+$("reset").onclick = () => {
+  if (holdUntil) { clearTimeout(holdUntil); holdUntil = 0; }
+  settled = false; worker.postMessage({ type: "reset" }); losses = []; targetIndex = 0; setTarget(0);
+  $("status").textContent = "learning: " + TARGETS[0].join(" ");
+  worker.postMessage({ type: "run", on: true });
+};
+document.addEventListener("visibilitychange", () => {
+  if (!holdUntil && !settled) worker.postMessage({ type: "run", on: !document.hidden });
+});
+});
+</script>
+</body>
+</html>

@@ -1,0 +1,320 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#07061a">
+<style>
+html,body{height:100%;margin:0;background:#07061a;color:#7dff9b;overflow:hidden;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;touch-action:none;user-select:none;-webkit-user-select:none}
+canvas{position:fixed;inset:0;width:100%;height:100%;display:block}
+#hud{cursor:grab}
+#hud:active{cursor:grabbing}
+.panel{position:fixed;left:50%;bottom:max(14px,env(safe-area-inset-bottom));transform:translateX(-50%);display:flex;flex-direction:column;align-items:center;gap:8px;width:min(100% - 24px,640px);pointer-events:none;text-align:center}
+h1{margin:0;font-size:clamp(16px,2.2vw,30px);font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:#d4ffe0;text-shadow:0 0 14px #2dff6e,0 1px 3px #000}
+.role{margin:0;font-size:clamp(10px,1.05vw,13px);letter-spacing:.12em;color:#ffcf6a;text-shadow:0 1px 3px #000}
+.radio{display:flex;gap:10px;pointer-events:auto;width:100%;justify-content:center}
+a{flex:0 1 230px;color:#ffcf6a;background:#070a0cdd;border:1px solid #7dff9b66;text-decoration:none;padding:9px 10px;font-size:clamp(11px,1.1vw,13px);font-weight:700;letter-spacing:.06em;white-space:nowrap}
+a:hover,a:focus-visible{background:#7dff9b;color:#04140a}
+</style>
+</head>
+<body>
+<canvas id="c" aria-hidden="true"></canvas>
+<canvas id="hud" aria-label="Flight display. A drone fleet forms this person's name and fields ahead of the aircraft. Drag to hand fly."></canvas>
+<div class="panel">
+  <h1 id="name"></h1>
+  <p class="role" id="role"></p>
+  <div class="radio">
+    <a id="gh" rel="me noopener">GITHUB</a>
+    <a id="li" rel="me noopener">LINKEDIN</a>
+  </div>
+</div>
+<script src="../config.js"></script>
+<script src="shapes.js"></script>
+<script src="flight.js"></script>
+<script src="drone-sim.js"></script>
+<script>
+{
+const S = SITE, FL = FLIGHT, D = DRONE, $ = id => document.getElementById(id);
+$("name").textContent = S.full; $("role").textContent = "A DRONE FLEET FLOWN BY A NEURAL NET TRAINED IN YOUR BROWSER";
+$("gh").href = S.github; $("li").href = S.linkedin;
+const c = $("c"), gl = c.getContext("webgl", { antialias: true, alpha: false, powerPreference: "high-performance" });
+if (!gl) { S.noWebGL(); throw new Error("WebGL unavailable"); }
+const still = matchMedia("(prefers-reduced-motion: reduce)").matches;
+const RES = [.55, .8, 1];
+const tier = S.tier(gl);
+let level = tier;
+const govern = S.governor(level, l => { level = l; size(); });
+const small = Math.min(innerWidth, innerHeight) < 600;
+const world = FL.scene(gl, [84, 120, small ? 110 : 170][tier]);
+const F = FL.aircraft(), terrain = FL.terrain;
+const N = [300, 700, small ? 900 : 1400][tier];
+
+// The fleet brain was trained on a planar quadcopter, so each formation is a vertical plane facing the aircraft.
+// Inside that plane drones fly the real learned controller in metres; K turns metres into world units.
+// Along the flight path they close in with simple kinematics.
+const K = 105, STEPS = 28, SIM = STEPS * .05, DIST = 3000, VMAX = 850, AMAX = 420;
+
+// ---------- Shapes, sampled on an even grid so letters stay crisp ----------
+function sample(paint, boxW, boxH) {
+  const mw = 700, mh = Math.round(mw * boxH / boxW), m = document.createElement("canvas"); m.width = mw; m.height = mh;
+  const g = m.getContext("2d", { willReadFrequently: true });
+  paint(g, mw, mh);
+  const d = g.getImageData(0, 0, mw, mh).data;
+  // Pick the grid spacing with as many spots as drones without going over, so every spot gets a drone
+  // (a denser grid with spots dropped at random left holes). The few spare drones double up on spots.
+  const grid = step => { const list = []; for (let y = step / 2; y < mh; y += step) for (let a = step / 2; a < mw; a += step) if (d[((y | 0) * mw + (a | 0)) * 4 + 3] > 120) list.push([(a / mw - .5) * boxW, (.5 - y / mh) * boxH]); return list; };
+  let lo = 1.5, hi = 24;
+  for (let i = 0; i < 24; i++) { const mid = (lo + hi) / 2; if (grid(mid).length > N) lo = mid; else hi = mid; }
+  const list = grid(hi);
+  for (let i = list.length - 1; i > 0; i--) { const j = Math.random() * (i + 1) | 0, t = list[i]; list[i] = list[j]; list[j] = t; }
+  const out = [];
+  for (let i = 0; i < N; i++) out.push(list[i % list.length]);
+  return out.sort((a, b) => a[0] - b[0]);
+}
+const words = lines => (g, w, h) => {
+  const face = '900 100px "Arial Black","Helvetica Neue",Arial,sans-serif';
+  g.font = face;
+  const widest = Math.max(...lines.map(l => g.measureText(l).width));
+  const size = Math.min(100 * w * .97 / widest, h * .94 / lines.length);
+  g.font = face.replace("100px", size + "px");
+  g.textAlign = "center"; g.textBaseline = "middle"; g.fillStyle = "#fff";
+  lines.forEach((l, i) => g.fillText(l, w / 2, h / 2 + (i - (lines.length - 1) / 2) * size * 1.03));
+};
+const art = (key, lw) => (g, w, h) => {
+  const sh = SHAPES[key], s = Math.min(w / sh.w, h / sh.h) * .92;
+  g.translate((w - sh.w * s) / 2, (h - sh.h * s) / 2); g.scale(s, s);
+  g.strokeStyle = "#fff"; g.lineWidth = lw; g.lineCap = g.lineJoin = "round"; g.stroke(new Path2D(sh.d));
+};
+let shapes = [], shapeIndex = 0, narrow = false;
+function buildShapes() {
+  narrow = innerWidth / innerHeight < 1;
+  const nw = narrow ? 6.4 : 16, nh = narrow ? 5 : 4.4, iw = narrow ? 6 : 11, ih = narrow ? 4.6 : 5.2;
+  const make = (cap, paint, w, h, hue) => ({ cap, pts: sample(paint, w, h), w, h, hue });
+  shapes = [
+    make("", words(narrow ? S.lines(true) : [S.full.toUpperCase()]), nw, nh, [.45, .95, 1]),
+    make("MACHINE LEARNING", art("net", 3), iw, ih, [1, .4, .78]),
+    make("SOFTWARE", words(["</>"]), iw, ih, [.55, .62, 1]),
+    make("ELECTRICAL", art("chip", 5), iw, ih, [1, .82, .35]),
+    make("PILOT", art("jet", 4.5), iw * 1.1, ih, [1, .62, .28]),
+    make("DRONES", art("drone", 5), iw, ih, [.35, 1, .62]),
+  ];
+}
+
+// ---------- The fleet ----------
+const drones = [];
+// Formation frame: centre O, along-track axis A and lateral axis L, both horizontal.
+const O = { x: 0, y: 0, z: 0, ax: 0, az: 1, lx: 1, lz: 0, passed: false, passT: 0, offT: 0 };
+const toWorld = (d, out) => {
+  out[0] = O.x + O.lx * d.x * K + O.ax * d.s; out[1] = O.y + d.y * K; out[2] = O.z + O.lz * d.x * K + O.az * d.s;
+};
+// Put a drone on the ground below its slot, ready to launch.
+function park(d) {
+  d.x = d.tx + (Math.random() - .5) * .4; d.s = (Math.random() - .5) * 260;
+  const gx = O.x + O.lx * d.x * K + O.ax * d.s, gz = O.z + O.lz * d.x * K + O.az * d.s;
+  d.y = (terrain(gx, gz) + 5 - O.y) / K; d.vx = d.vy = d.a = d.w = d.sv = 0; d.trail = 0;
+}
+function assign(sh) {
+  const order = drones.map((_, i) => i).sort((a, b) => drones[a].x - drones[b].x);
+  order.forEach((di, k) => { drones[di].tx = sh.pts[k][0]; drones[di].ty = sh.pts[k][1]; });
+}
+// Place the next formation ahead, at a height that clears the terrain under it and along the way.
+function anchor(psi) {
+  const ax = Math.sin(psi), az = Math.cos(psi), lx = az, lz = -ax;
+  const cx = F.x + ax * DIST, cz = F.z + az * DIST, sh = shapes[shapeIndex];
+  let foot = -1e9, path = -1e9;
+  for (let u = -.6; u <= .6; u += .05) foot = Math.max(foot, terrain(cx + lx * u * sh.w * K, cz + lz * u * sh.w * K));
+  for (let k = 0; k <= 1; k += .04) path = Math.max(path, terrain(F.x + ax * DIST * k, F.z + az * DIST * k));
+  const y = Math.max(F.alt, foot + sh.h / 2 * K + 90, path + 140);
+  // Re-express every drone, position and velocity, in the new frame.
+  const p = [0, 0, 0];
+  for (const d of drones) {
+    toWorld(d, p);
+    const vx = O.lx * d.vx * K * SIM + O.ax * d.sv, vy = d.vy * K * SIM, vz = O.lz * d.vx * K * SIM + O.az * d.sv;
+    const rx = p[0] - cx, ry = p[1] - y, rz = p[2] - cz;
+    d.x = (rx * lx + rz * lz) / K; d.y = ry / K; d.s = rx * ax + rz * az;
+    d.vx = (vx * lx + vz * lz) / (K * SIM); d.vy = vy / (K * SIM); d.sv = vx * ax + vz * az;
+  }
+  Object.assign(O, { x: cx, y, z: cz, ax, az, lx, lz, passed: false, offT: 0 });
+  assign(sh);
+}
+
+// ---------- Live training in a worker. Each generation's best brain flies the whole fleet. ----------
+let brain = null, trained = false, gen = 0, err = 0;
+if (!still) {
+  const worker = new Worker("drone-sim.js");
+  worker.onmessage = ({ data }) => {
+    brain = data.best; gen = data.gen; err = data.err;
+    if (data.done) { trained = true; worker.terminate(); }
+  };
+}
+
+// ---------- Drone rendering: additive glowing points plus motion streaks ----------
+const DVS = `
+attribute vec3 aP; attribute vec4 aC;
+uniform mat3 uR; uniform vec3 uCam; uniform float uF, uAsp, uPx;
+varying vec4 vC;
+${FL.PROJECT}
+void main(){
+  vec3 v=uR*(aP-uCam);
+  gl_Position=project(v);
+  gl_PointSize=clamp(uPx/max(v.z,1.),2.,26.);
+  vC=aC; vC.a*=smoothstep(15.,70.,v.z)*(.55+.45*smoothstep(5200.,2600.,v.z));
+}`;
+const dotP = world.program(DVS, "precision mediump float; varying vec4 vC; void main(){ vec2 p=gl_PointCoord-.5; float d=dot(p,p)*4.; float a=exp(-d*4.)*.75+exp(-d*30.); gl_FragColor=vec4(vC.rgb*a*vC.a,1.); }");
+const lineP = world.program(DVS, "precision mediump float; varying vec4 vC; void main(){ gl_FragColor=vec4(vC.rgb*vC.a,1.); }");
+const dotBuf = gl.createBuffer(), lineBuf = gl.createBuffer();
+const dotData = new Float32Array(N * 7), lineData = new Float32Array(N * 14);
+gl.bindBuffer(gl.ARRAY_BUFFER, dotBuf); gl.bufferData(gl.ARRAY_BUFFER, dotData.byteLength, gl.DYNAMIC_DRAW);
+gl.bindBuffer(gl.ARRAY_BUFFER, lineBuf); gl.bufferData(gl.ARRAY_BUFFER, lineData.byteLength, gl.DYNAMIC_DRAW);
+function drawFleet(R, prog, buf, data, mode, count) {
+  gl.useProgram(prog);
+  gl.bindBuffer(gl.ARRAY_BUFFER, buf); gl.bufferSubData(gl.ARRAY_BUFFER, 0, data);
+  const aP = gl.getAttribLocation(prog, "aP"), aC = gl.getAttribLocation(prog, "aC");
+  gl.enableVertexAttribArray(aP); gl.vertexAttribPointer(aP, 3, gl.FLOAT, false, 28, 0);
+  gl.enableVertexAttribArray(aC); gl.vertexAttribPointer(aC, 4, gl.FLOAT, false, 28, 12);
+  const u = n => gl.getUniformLocation(prog, n);
+  gl.uniformMatrix3fv(u("uR"), false, R); gl.uniform3f(u("uCam"), F.x, F.alt, F.z);
+  gl.uniform1f(u("uF"), FL.FOCAL); gl.uniform1f(u("uAsp"), aspect); gl.uniform1f(u("uPx"), 9 * FL.FOCAL * c.height / 2);
+  gl.drawArrays(mode, 0, count);
+  gl.disableVertexAttribArray(aP); gl.disableVertexAttribArray(aC);
+}
+
+// ---------- Simulation ----------
+const st = FL.stick($("hud"), F);
+let stepClock = 0, clock = 0;
+const P = [0, 0, 0];
+function simulate(dt) {
+  const sh = shapes[shapeIndex], hue = sh.hue;
+  // Where the aircraft is in the formation's frame.
+  const rx = F.x - O.x, rz = F.z - O.z, ps = rx * O.ax + rz * O.az, pu = (rx * O.lx + rz * O.lz) / K, pv = (F.alt - O.y) / K;
+  const speed = F.v * 1.9;
+
+  // Autopilot aims through the middle of the formation, then holds heading once it's close.
+  let want;
+  if (st.hand) want = st.want(dt);
+  else {
+    const aim = ps < -350 && !O.passed ? Math.atan2(O.x - F.x, O.z - F.z) : F.psi;
+    want = FL.autopilot(F, dt, aim, O.passed ? O.passAlt : O.y);
+  }
+  FL.fly(F, dt, want);
+
+  // Flew through it, or flew away from it: the fleet regroups ahead.
+  if (!O.passed && ps > 30) { O.passed = true; O.passT = clock; O.passAlt = F.alt; }
+  const off = Math.abs(FL.wrap(Math.atan2(O.x - F.x, O.z - F.z) - F.psi)) > 1.4 || Math.hypot(rx, rz) > DIST * 1.8;
+  O.offT = !O.passed && off ? O.offT + dt : 0;
+  if ((O.passed && clock - O.passT > .55) || O.offT > 2.5) {
+    shapeIndex = (shapeIndex + 1) % shapes.length;
+    anchor(st.hand ? F.psi : F.psi + (Math.random() - .5) * .9);
+  }
+
+  if (!brain) return;
+  stepClock += dt * STEPS;
+  const steps = Math.min(4, stepClock | 0); stepClock -= steps;
+  for (let i = 0; i < N; i++) {
+    const d = drones[i];
+    for (let k = 0; k < steps; k++) D.step(brain, d, d.tx, d.ty);
+    // Along the flight path: accelerate, cruise and brake into the formation plane.
+    const goal = -Math.sign(d.s) * Math.min(VMAX, Math.sqrt(2 * AMAX * Math.abs(d.s)));
+    d.sv += (goal - d.sv) * Math.min(1, dt * 3); d.s += d.sv * dt;
+    // The aircraft's bow wave pushes drones out of its path. The controller has to recover.
+    const ahead = d.s - ps;
+    if (ahead > -150 && ahead < 480) {
+      const dx = d.x - pu, dy = d.y - pv, q = Math.hypot(dx, dy);
+      if (q < 3.4) {
+        const f = (1 - q / 3.4) * (1 - Math.max(0, ahead) / 480);
+        d.vx += dx / (q + .05) * f * 45 * dt; d.vy += dy / (q + .05) * f * 45 * dt;
+        d.sv += speed * f * dt * 3; d.flash = Math.max(d.flash, f * 1.6);
+      }
+    }
+    toWorld(d, P);
+    if (!(d.x === d.x) || Math.abs(d.x) > 40 || d.y > 30 || P[1] < terrain(P[0], P[2]) + 2) park(d);
+    d.r += (hue[0] - d.r) * .04; d.g += (hue[1] - d.g) * .04; d.b += (hue[2] - d.b) * .04;
+    d.flash *= Math.max(0, 1 - dt * 2.5);
+  }
+}
+
+// Fill the vertex buffers: each drone is a dot and a short streak along its velocity.
+function packFleet() {
+  for (let i = 0; i < N; i++) {
+    const d = drones[i];
+    toWorld(d, P);
+    const vx = O.lx * d.vx * K * SIM + O.ax * d.sv, vy = d.vy * K * SIM, vz = O.lz * d.vx * K * SIM + O.az * d.sv;
+    const sp = Math.min(1, Math.hypot(vx, vy, vz) / 1200), fl = Math.min(1, d.flash);
+    const r = d.r + (1 - d.r) * (sp * .35 + fl * .6), g = d.g * (1 - fl * .45) + fl * .25, b = d.b + (1 - d.b) * fl * .4;
+    let o = i * 7;
+    dotData[o] = P[0]; dotData[o + 1] = P[1]; dotData[o + 2] = P[2];
+    dotData[o + 3] = r; dotData[o + 4] = g; dotData[o + 5] = b; dotData[o + 6] = 1;
+    o = i * 14;
+    lineData[o] = P[0]; lineData[o + 1] = P[1]; lineData[o + 2] = P[2];
+    lineData[o + 3] = r; lineData[o + 4] = g; lineData[o + 5] = b; lineData[o + 6] = .8 * sp + .1;
+    lineData[o + 7] = P[0] - vx * .07; lineData[o + 8] = P[1] - vy * .07; lineData[o + 9] = P[2] - vz * .07;
+    lineData[o + 10] = r; lineData[o + 11] = g; lineData[o + 12] = b; lineData[o + 13] = 0;
+  }
+}
+
+// ---------- Frame ----------
+const hud = $("hud"), h = hud.getContext("2d");
+let W, H, dpr, aspect = 1;
+function size() {
+  W = innerWidth; H = innerHeight; aspect = W / H;
+  dpr = Math.min(devicePixelRatio || 1, small ? 1.5 : 1.75) * RES[level];
+  c.width = W * dpr; c.height = H * dpr; gl.viewport(0, 0, c.width, c.height);
+  hud.width = W * Math.min(devicePixelRatio || 1, 2); hud.height = H * Math.min(devicePixelRatio || 1, 2);
+}
+function draw() {
+  const cam = FL.basis(F), R = world.render(F, cam, aspect);
+  packFleet();
+  gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE); gl.depthMask(false);
+  drawFleet(R, lineP, lineBuf, lineData, gl.LINES, N * 2);
+  drawFleet(R, dotP, dotBuf, dotData, gl.POINTS, N);
+  gl.disable(gl.BLEND); gl.depthMask(true);
+
+  const tight = W < 560;
+  const mode = st.hand ? "HAND FLYING"
+    : !brain ? "AUTOPILOT · FLEET BRAIN BOOTING"
+    : trained ? (tight ? "AUTOPILOT · FLEET TRAINED HERE" : "AUTOPILOT · FLEET TRAINED ON THIS DEVICE · " + FL.FLY)
+    : (tight ? "" : "FLEET BRAIN ") + "LEARNING · GEN " + gen + " · " + (err > 50 ? "CRASHING" : err.toFixed(2) + " M");
+  FL.hud(hud, h, W, H, F, mode, st.hand || (brain && !trained) ? FL.AMBER : FL.GREEN, st);
+
+  // Tag the formation like a waypoint.
+  const sh = shapes[shapeIndex], tag = FL.project(cam, F, O.x, O.y + sh.h / 2 * K + 70, O.z, W, H);
+  if (!O.passed && tag.z > 300 && tag.x > 20 && tag.x < W - 20 && tag.y > 70 && tag.y < H - 20) {
+    const dist = Math.hypot(O.x - F.x, O.z - F.z);
+    h.fillStyle = "#ff77d0"; h.font = "bold 12px ui-monospace,Menlo,monospace"; h.textAlign = "center"; h.textBaseline = "alphabetic";
+    h.fillText((sh.cap ? sh.cap + " · " : "") + (dist / 1852).toFixed(1) + " NM", tag.x, tag.y);
+  }
+}
+let last = 0;
+function frame(t) {
+  requestAnimationFrame(frame);
+  if (document.hidden) { last = t; return; }
+  govern(t);
+  const dt = Math.min(.05, (t - last) / 1000); last = t; clock += dt;
+  simulate(dt);
+  draw();
+}
+let rt, bw = innerWidth;
+addEventListener("resize", () => {
+  size();
+  if (still) draw();
+  if (innerWidth === bw) return;
+  bw = innerWidth; clearTimeout(rt);
+  rt = setTimeout(() => { buildShapes(); assign(shapes[shapeIndex]); }, 150);
+});
+S.ready(() => {
+  bw = innerWidth; size(); buildShapes();
+  for (let i = 0; i < N; i++) drones.push({ x: 0, y: 0, vx: 0, vy: 0, a: 0, w: 0, s: 0, sv: 0, tx: 0, ty: 0, r: .45, g: .95, b: 1, flash: 0 });
+  anchor(0);
+  // The fleet waits on the ground under its first formation until the brain is ready.
+  drones.forEach(park);
+  if (still) {
+    // Reduced motion: show the finished name, no flight.
+    drones.forEach(d => { d.x = d.tx; d.y = d.ty; d.s = 0; });
+    F.x = O.x - O.ax * 1500; F.z = O.z - O.az * 1500; F.alt = O.y;
+    draw();
+  } else requestAnimationFrame(frame);
+});
+}
+</script>
+</body>
+</html>

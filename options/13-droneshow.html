@@ -1,0 +1,262 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#03040c">
+<style>
+html,body{height:100%;margin:0;background:#03040c;color:#fff;overflow:hidden;font-family:"Helvetica Neue",Helvetica,Arial,sans-serif;touch-action:none}
+canvas{position:fixed;inset:0;width:100%;height:100%;display:block}
+.ui{position:fixed;left:0;right:0;bottom:0;display:flex;justify-content:space-between;align-items:flex-end;gap:14px;flex-wrap:wrap;padding:0 clamp(16px,3vw,40px) max(20px,env(safe-area-inset-bottom));pointer-events:none}
+h1{margin:0;font-size:clamp(20px,2.6vw,38px);font-weight:300;letter-spacing:.16em;text-transform:uppercase}
+.cap{position:fixed;left:0;right:0;top:max(22px,env(safe-area-inset-top));text-align:center;font:clamp(12px,1.3vw,16px) ui-monospace,Menlo,Consolas,monospace;letter-spacing:.3em;text-transform:uppercase;color:#cfe2ff;pointer-events:none;transition:opacity .5s;padding:0 16px}
+.links{display:flex;gap:10px;pointer-events:auto}
+a{color:#fff;text-decoration:none;font-size:13px;letter-spacing:.14em;text-transform:uppercase;padding:11px 20px;border:1px solid #ffffff66;border-radius:99px;background:#ffffff14;transition:background .2s,color .2s}
+a:hover,a:focus-visible{background:#fff;color:#03040c}
+</style>
+</head>
+<body>
+<canvas id="c" aria-hidden="true"></canvas>
+<div class="cap" id="cap" aria-hidden="true"></div>
+<div class="ui">
+  <h1 id="name"></h1>
+  <div class="links"><a id="gh" rel="me noopener">GitHub</a><a id="li" rel="me noopener">LinkedIn</a></div>
+</div>
+<script src="../config.js"></script>
+<script src="shapes.js"></script>
+<script>
+{
+const S = SITE, $ = id => document.getElementById(id);
+$("name").textContent = S.full; $("gh").href = S.github; $("li").href = S.linkedin;
+const c = $("c"), gl = c.getContext("webgl", { antialias: false, alpha: false, preserveDrawingBuffer: true, powerPreference: "high-performance" });
+if (!gl) { S.noWebGL(); throw new Error("WebGL unavailable"); }
+const SHARE = [.35, .6, 1];
+let level = S.tier(gl), active = 0;
+const govern = S.governor(level, l => { level = l; active = Math.round(N * SHARE[l]); });
+const still = matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+const N = Math.min(innerWidth, innerHeight) < 600 ? 1200 : 1900;
+active = Math.round(N * SHARE[level]);
+const POINT_VS = `
+attribute vec3 aP; attribute vec3 aC; attribute float aS;
+uniform mat4 uVP; uniform float uFlip, uDim, uScale, uGround;
+varying vec3 vC;
+void main(){
+  vec3 p=aP;
+  if(uFlip>.5) p.y=2.*uGround-p.y;
+  vec4 q=uVP*vec4(p,1.);
+  gl_Position=q;
+  gl_PointSize=max(1.,aS*uScale/q.w);
+  vC=aC*uDim;
+}`;
+const POINT_FS = `
+precision mediump float; varying vec3 vC;
+void main(){ float d=length(gl_PointCoord-.5)*2.; if(d>1.) discard;
+  float core=smoothstep(.45,.0,d), halo=pow(1.-d,2.)*.5;
+  gl_FragColor=vec4(vC*halo+vec3(1.)*core*dot(vC,vec3(.5)),1.); }`;
+const BG_VS = "attribute vec2 a; varying vec2 v; void main(){v=a;gl_Position=vec4(a,0.,1.);}";
+const BG_FS = `
+precision mediump float; varying vec2 v; uniform float uH;
+void main(){
+  float d=v.y-uH; vec3 c;
+  if(d>0.) c=mix(vec3(.13,.07,.2),vec3(.012,.016,.05),smoothstep(0.,.75,d));
+  else c=mix(vec3(.06,.04,.1),vec3(.012,.012,.03),smoothstep(0.,.5,-d));
+  gl_FragColor=vec4(c,.3);
+}`;
+function program(vs, fs) {
+  const p = gl.createProgram();
+  for (const [t, s] of [[gl.VERTEX_SHADER, vs], [gl.FRAGMENT_SHADER, fs]]) { const o = gl.createShader(t); gl.shaderSource(o, s); gl.compileShader(o); gl.attachShader(p, o); }
+  gl.linkProgram(p); return p;
+}
+const pts = program(POINT_VS, POINT_FS), bg = program(BG_VS, BG_FS);
+const loc = { P: gl.getAttribLocation(pts, "aP"), C: gl.getAttribLocation(pts, "aC"), Z: gl.getAttribLocation(pts, "aS"),
+  VP: gl.getUniformLocation(pts, "uVP"), flip: gl.getUniformLocation(pts, "uFlip"), dim: gl.getUniformLocation(pts, "uDim"), scale: gl.getUniformLocation(pts, "uScale"), ground: gl.getUniformLocation(pts, "uGround"),
+  bgA: gl.getAttribLocation(bg, "a"), bgH: gl.getUniformLocation(bg, "uH") };
+const quad = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, quad); gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+const droneBuf = gl.createBuffer(), sceneBuf = gl.createBuffer();
+const GROUND = -1.15;
+
+// Stars and a lit runway. Layout: x, y, z, r, g, b, size.
+const scene = [];
+const addP = (x, y, z, r, g, b, s) => scene.push(x, y, z, r, g, b, s);
+for (let i = 0; i < 500; i++) {
+  const a = Math.random() * 6.283, x = Math.cos(a) * 60, z = Math.sin(a) * 60 - 20, y = Math.random() * 40 + .5, b = .25 + Math.random() * .6;
+  addP(x, y, z, b, b, b * 1.1, .14 + Math.random() * .2);
+}
+for (let z = 1.5; z > -34; z -= 1) {
+  addP(-.7, GROUND, z, 1, .95, .75, .05); addP(.7, GROUND, z, 1, .95, .75, .05);
+  if (Math.abs(z % 2) < .5) addP(0, GROUND, z, .9, .95, 1, .035);
+}
+for (let k = -6; k <= 6; k++) { addP(k * .12, GROUND, -34, .3, 1, .4, .06); addP(k * .12, GROUND, 1.8, 1, .25, .25, .05); }
+const sceneCount = scene.length / 7;
+const flashers = 8;
+gl.bindBuffer(gl.ARRAY_BUFFER, sceneBuf); gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(scene), gl.STATIC_DRAW);
+
+// Fleet state.
+const pos = new Float32Array(N * 3), vel = new Float32Array(N * 3), tgt = new Float32Array(N * 3), col = new Float32Array(N * 3), tcol = new Float32Array(N * 3);
+const seedv = new Float32Array(N * 3).map(() => Math.random() * 6.283);
+const gpu = new Float32Array(N * 7);
+for (let i = 0; i < N; i++) {
+  pos[i * 3] = (Math.random() - .5) * 2.8; pos[i * 3 + 1] = GROUND + .02; pos[i * 3 + 2] = -1.6 + Math.random() * 3;
+  col.set([.3, .5, 1], i * 3);
+}
+
+// Formations: draw a shape into a mask, then sample outline-heavy positions.
+const FW = 900;
+let formations = [], fi = 0, nextSwitch = 0, aspect = 1, halfW = 2, halfH = 1;
+function sample(paint, aspectBox) {
+  const w = FW, h = Math.round(FW / aspectBox), m = document.createElement("canvas"); m.width = w; m.height = h;
+  const x = m.getContext("2d", { willReadFrequently: true });
+  paint(x, w, h);
+  const d = x.getImageData(0, 0, w, h).data;
+  // Pick the grid spacing with as many spots as drones without going over, so every spot gets a drone
+  // (a denser grid with spots dropped at random left holes). The few spare drones double up on spots.
+  const grid = step => { const list = []; for (let py = step / 2; py < h; py += step) for (let px = step / 2; px < w; px += step) if (d[((py | 0) * w + (px | 0)) * 4 + 3] > 120) list.push(px / w * 2 - 1, 1 - py / h * 2); return list; };
+  let lo = 1.5, hi = 24;
+  for (let i = 0; i < 24; i++) { const mid = (lo + hi) / 2; if (grid(mid).length / 2 > N) lo = mid; else hi = mid; }
+  const list = grid(hi);
+  const out = new Float32Array(N * 2), cnt = list.length / 2;
+  for (let i = cnt - 1; i > 0; i--) {
+    const j = Math.random() * (i + 1) | 0;
+    const a = list[i * 2], b = list[i * 2 + 1]; list[i * 2] = list[j * 2]; list[i * 2 + 1] = list[j * 2 + 1]; list[j * 2] = a; list[j * 2 + 1] = b;
+  }
+  for (let i = 0; i < N; i++) { const k = i % cnt; out[i * 2] = list[k * 2] * halfW; out[i * 2 + 1] = list[k * 2 + 1] * halfW / aspectBox; }
+  return out;
+}
+function art(key, stroke) {
+  const sh = SHAPES[key], path = new Path2D(sh.d);
+  return (x, w, h) => {
+    const s = Math.min(w / sh.w, h / sh.h) * .9;
+    x.translate((w - sh.w * s) / 2, (h - sh.h * s) / 2); x.scale(s, s);
+    x.strokeStyle = "#fff"; x.lineJoin = "round"; x.lineCap = "round"; x.lineWidth = stroke;
+    x.stroke(path);
+  };
+}
+function words(lines) {
+  return (x, w, h) => {
+    const face = '900 100px "Arial Black","Helvetica Neue",Arial,sans-serif';
+    x.font = face;
+    const widest = Math.max(...lines.map(l => x.measureText(l).width));
+    const size = Math.min(100 * w * .96 / widest, h * .92 / lines.length);
+    x.font = face.replace("100px", size + "px");
+    x.textAlign = "center"; x.textBaseline = "middle"; x.fillStyle = "#fff";
+    lines.forEach((l, i) => x.fillText(l, w / 2, h / 2 + (i - (lines.length - 1) / 2) * size * 1.02));
+  };
+}
+function build() {
+  const narrow = aspect < 1, box = narrow ? 1.05 : 2.1;
+  formations = [
+    { cap: "", pts: sample(words(narrow ? S.lines(true) : [S.first.toUpperCase(), S.last.toUpperCase()]), box), c: [.55, .85, 1], hold: 8 },
+    { cap: "Private pilot", pts: sample(art("jet", 5), box), c: [1, .72, .25], hold: 5 },
+    { cap: "Drones", pts: sample(art("drone", 6), box), c: [.3, 1, .55], hold: 5 },
+    { cap: "Electrical engineer", pts: sample(art("chip", 6), box), c: [1, .85, .35], hold: 5 },
+    { cap: "Machine learning engineer", pts: sample(art("net", 3.2), box), c: [1, .35, .78], hold: 5 },
+    { cap: "Software engineer", pts: sample(words(["</>"]), box), c: [.5, .6, 1], hold: 4 },
+  ];
+}
+function assign(f) {
+  // Match by left-to-right order so the fleet sweeps across instead of tangling.
+  const order = Array.from({ length: N }, (_, i) => i).sort((a, b) => pos[a * 3] - pos[b * 3] + (Math.random() - .5) * .25);
+  const tOrder = Array.from({ length: N }, (_, i) => i).sort((a, b) => f.pts[a * 2] - f.pts[b * 2]);
+  const yMid = GROUND + 1.15 + halfW / (aspect < 1 ? 1.05 : 2.1) * .95;
+  for (let k = 0; k < N; k++) {
+    const i = order[k], j = tOrder[k];
+    tgt[i * 3] = f.pts[j * 2]; tgt[i * 3 + 1] = f.pts[j * 2 + 1] + yMid; tgt[i * 3 + 2] = (seedv[i * 3] / 6.283 - .5) * .22;
+    tcol[i * 3] = f.c[0]; tcol[i * 3 + 1] = f.c[1]; tcol[i * 3 + 2] = f.c[2];
+  }
+  const cap = $("cap");
+  cap.style.opacity = 0;
+  setTimeout(() => { cap.textContent = f.cap; cap.style.opacity = 1; }, 450);
+}
+
+// Small matrix helpers.
+function perspective(f, a, n, r) { return new Float32Array([f / a, 0, 0, 0, 0, f, 0, 0, 0, 0, (r + n) / (n - r), -1, 0, 0, 2 * r * n / (n - r), 0]); }
+function lookAt(e, t) {
+  const fw = [t[0] - e[0], t[1] - e[1], t[2] - e[2]], l = Math.hypot(...fw); fw[0] /= l; fw[1] /= l; fw[2] /= l;
+  const r = [-fw[2], 0, fw[0]], rl = Math.hypot(...r); r[0] /= rl; r[2] /= rl;
+  const u = [r[1] * fw[2] - r[2] * fw[1], r[2] * fw[0] - r[0] * fw[2], r[0] * fw[1] - r[1] * fw[0]];
+  return new Float32Array([r[0], u[0], -fw[0], 0, r[1], u[1], -fw[1], 0, r[2], u[2], -fw[2], 0,
+    -(r[0] * e[0] + r[2] * e[2] + r[1] * e[1]), -(u[0] * e[0] + u[1] * e[1] + u[2] * e[2]), fw[0] * e[0] + fw[1] * e[1] + fw[2] * e[2], 1]);
+}
+function mul(a, b) {
+  const o = new Float32Array(16);
+  for (let i = 0; i < 4; i++) for (let j = 0; j < 4; j++) { let s = 0; for (let k = 0; k < 4; k++) s += a[k * 4 + j] * b[i * 4 + k]; o[i * 4 + j] = s; }
+  return o;
+}
+
+let dpr = 1, pxScale = 1, mx = 0, my = 0, tx = 0, ty = 0;
+const FOV = 1.55;
+function size() {
+  dpr = Math.min(devicePixelRatio || 1, 1.75);
+  c.width = innerWidth * dpr; c.height = innerHeight * dpr;
+  gl.viewport(0, 0, c.width, c.height);
+  aspect = innerWidth / innerHeight;
+  pxScale = c.height * FOV * .5;
+  const visible = 5.2 / FOV; // half height at the formation plane
+  halfH = visible * .62;
+  halfW = Math.min(visible * aspect * .92, halfH * (aspect < 1 ? 1.05 : 2.1));
+  build();
+  fi = 0; assign(formations[0]);
+}
+addEventListener("pointermove", e => { tx = e.clientX / innerWidth * 2 - 1; ty = e.clientY / innerHeight * 2 - 1; }, { passive: true });
+
+let last = 0, clock = 0;
+function frame(t) {
+  if (!still) requestAnimationFrame(frame);
+  if (document.hidden) { last = t; return; }
+  govern(t);
+  const dt = Math.min(.05, (t - last) / 1000); last = t; clock += dt;
+  if (clock > nextSwitch) { nextSwitch = clock + formations[fi].hold + 3; if (clock > 1) { fi = (fi + 1) % formations.length; assign(formations[fi]); } }
+  const k = dt * 60;
+  for (let i = 0; i < active * 3; i++) {
+    const hover = Math.sin(clock * .9 + seedv[i]) * .006;
+    const a = (tgt[i] + hover - pos[i]) * .012;
+    vel[i] = (vel[i] + a * k) * Math.pow(.9, k);
+    const lim = .05;
+    vel[i] = Math.max(-lim, Math.min(lim, vel[i]));
+    pos[i] += vel[i] * k;
+    col[i] += (tcol[i] - col[i]) * .03 * k;
+  }
+  for (let i = 0; i < active; i++) {
+    const o = i * 7;
+    gpu[o] = pos[i * 3]; gpu[o + 1] = pos[i * 3 + 1]; gpu[o + 2] = pos[i * 3 + 2];
+    gpu[o + 3] = col[i * 3]; gpu[o + 4] = col[i * 3 + 1]; gpu[o + 5] = col[i * 3 + 2];
+    gpu[o + 6] = .05;
+  }
+  mx += (tx - mx) * .03; my += (ty - my) * .03;
+  const ang = Math.sin(clock * .08) * .22 + mx * .45;
+  const eye = [Math.sin(ang) * 5.2, -.55 - my * .3, Math.cos(ang) * 5.2], look = [0, .35, 0];
+  const VP = mul(perspective(FOV, aspect, .1, 200), lookAt(eye, look));
+  // Horizon height in clip space, from a far point on the ground plane.
+  const hz = [-Math.sin(ang) * 120, GROUND, -Math.cos(ang) * 120];
+  const hy = (VP[1] * hz[0] + VP[5] * hz[1] + VP[9] * hz[2] + VP[13]) / (VP[3] * hz[0] + VP[7] * hz[1] + VP[11] * hz[2] + VP[15]);
+
+  // A translucent background leaves long-exposure streaks behind moving drones.
+  gl.useProgram(bg);
+  gl.enable(gl.BLEND); gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+  gl.bindBuffer(gl.ARRAY_BUFFER, quad); gl.enableVertexAttribArray(loc.bgA); gl.vertexAttribPointer(loc.bgA, 2, gl.FLOAT, false, 0, 0);
+  gl.uniform1f(loc.bgH, hy);
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
+  gl.disableVertexAttribArray(loc.bgA);
+
+  gl.useProgram(pts);
+  gl.blendFunc(gl.ONE, gl.ONE);
+  gl.uniformMatrix4fv(loc.VP, false, VP);
+  gl.uniform1f(loc.ground, GROUND); gl.uniform1f(loc.scale, pxScale);
+  gl.enableVertexAttribArray(loc.P); gl.enableVertexAttribArray(loc.C); gl.enableVertexAttribArray(loc.Z);
+  const layout = () => { gl.vertexAttribPointer(loc.P, 3, gl.FLOAT, false, 28, 0); gl.vertexAttribPointer(loc.C, 3, gl.FLOAT, false, 28, 12); gl.vertexAttribPointer(loc.Z, 1, gl.FLOAT, false, 28, 24); };
+  gl.bindBuffer(gl.ARRAY_BUFFER, sceneBuf); layout();
+  gl.uniform1f(loc.flip, 0); gl.uniform1f(loc.dim, .9);
+  gl.drawArrays(gl.POINTS, 0, sceneCount);
+  gl.bindBuffer(gl.ARRAY_BUFFER, droneBuf); gl.bufferData(gl.ARRAY_BUFFER, gpu, gl.DYNAMIC_DRAW); layout();
+  gl.uniform1f(loc.flip, 1); gl.uniform1f(loc.dim, .16); gl.drawArrays(gl.POINTS, 0, active);
+  gl.uniform1f(loc.flip, 0); gl.uniform1f(loc.dim, 1); gl.drawArrays(gl.POINTS, 0, active);
+}
+gl.clearColor(.012, .016, .05, 1); gl.clear(gl.COLOR_BUFFER_BIT);
+let rt, bw = innerWidth;
+addEventListener("resize", () => { if (innerWidth === bw) return; bw = innerWidth; clearTimeout(rt); rt = setTimeout(size, 150); });
+S.ready(() => { bw = innerWidth; size(); requestAnimationFrame(frame); });
+}
+</script>
+</body>
+</html>

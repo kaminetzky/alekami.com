@@ -1,0 +1,303 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#05040f">
+<style>
+*{box-sizing:border-box}
+html,body{min-height:100%;margin:0;background:#05040f;color:#ece9ff;font:12px/1.45 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+body{height:100dvh;display:grid;grid-template-rows:auto minmax(0,1fr) auto auto;gap:12px;padding:max(14px,env(safe-area-inset-top)) clamp(14px,3vw,36px) max(14px,env(safe-area-inset-bottom))}
+header{display:flex;justify-content:space-between;gap:12px;color:#9d97c9}
+#status{color:#ffd166;text-align:right}
+h1{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}
+.heroBox{position:relative;min-height:170px}
+#hero{position:absolute;inset:0;width:100%;height:100%;display:block}
+.row{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px}
+.card{border:1px solid #ffffff1f;padding:9px 11px;min-width:0}
+.card h2{margin:0 0 6px;font-size:11px;font-weight:400;letter-spacing:.12em;color:#9d97c9;display:flex;justify-content:space-between}
+.card h2 b{color:#fff;font-weight:600;letter-spacing:0}
+.card canvas{display:block;width:100%;height:112px}
+footer{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}
+footer b{font-size:14px;font-weight:600}
+.links{display:flex;gap:10px}
+a{color:#05040f;background:#4affc3;padding:9px 16px;text-decoration:none;font-weight:700;font-size:13px}
+a+a{background:#ff5ca8}a:hover,a:focus-visible{background:#fff}
+@media (max-width:800px){.row{grid-template-columns:1fr 1fr}.row .card:first-child{grid-column:1/-1}.card canvas{height:92px}body{height:auto;min-height:100dvh}.heroBox{height:34vh}}
+</style>
+</head>
+<body>
+<h1 id="sr"></h1>
+<header><span>autoencoder.ipynb · <span id="info"></span></span><span id="status">rendering a training set of letters</span></header>
+<div class="heroBox"><canvas id="hero" role="img" aria-label="This person's name, drawn by a neural network from memory"></canvas></div>
+<div class="row">
+  <section class="card"><h2>Reconstruction loss <b id="loss">...</b></h2><canvas id="curve"></canvas></section>
+  <section class="card"><h2>Latent space</h2><canvas id="map"></canvas></section>
+  <section class="card"><h2>Input → memory</h2><canvas id="pairs"></canvas></section>
+</div>
+<footer><span><b id="who"></b> · <span id="role"></span></span><div class="links"><a id="gh" rel="me noopener">GitHub</a><a id="li" rel="me noopener">LinkedIn</a></div></footer>
+<script src="../config.js"></script>
+<script id="wk" type="text/plain">
+// An autoencoder learns every letter through a tiny bottleneck, then redraws them from memory alone.
+const Z = 14, H1 = 96;
+let P, IN, G, m, v, data, labels, nData, iE1, iEb, iE2, iE2b, iD1, iD1b, iD2, iD2b, SIZE, stepN = 0, adamT = 0, ema = null, running = true, MAX = 3000, ALPHA = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+let h1, zv, h2, xo, dz, dh;
+const gauss = () => Math.sqrt(-2 * Math.log(1 - Math.random())) * Math.cos(6.2832 * Math.random());
+function setup() {
+  iE1 = 0; iEb = IN * H1; iE2 = iEb + H1; iE2b = iE2 + H1 * Z; iD1 = iE2b + Z; iD1b = iD1 + Z * H1; iD2 = iD1b + H1; iD2b = iD2 + H1 * IN; SIZE = iD2b + IN;
+  P = new Float32Array(SIZE); G = new Float32Array(SIZE); m = new Float32Array(SIZE); v = new Float32Array(SIZE);
+  for (let i = 0; i < IN * H1; i++) P[iE1 + i] = gauss() / Math.sqrt(IN);
+  for (let i = 0; i < H1 * Z; i++) P[iE2 + i] = gauss() / Math.sqrt(H1);
+  for (let i = 0; i < Z * H1; i++) P[iD1 + i] = gauss() / Math.sqrt(Z);
+  for (let i = 0; i < H1 * IN; i++) P[iD2 + i] = gauss() / Math.sqrt(H1);
+  P.fill(-1.2, iD2b, iD2b + IN);
+  h1 = new Float32Array(H1); zv = new Float32Array(Z); h2 = new Float32Array(H1); xo = new Float32Array(IN); dz = new Float32Array(Z); dh = new Float32Array(H1);
+}
+function encode(off) {
+  for (let i = 0; i < H1; i++) { let s = P[iEb + i]; const r = iE1 + i * IN; for (let j = 0; j < IN; j++) s += P[r + j] * data[off + j]; h1[i] = Math.tanh(s); }
+  for (let i = 0; i < Z; i++) { let s = P[iE2b + i]; const r = iE2 + i * H1; for (let j = 0; j < H1; j++) s += P[r + j] * h1[j]; zv[i] = s; }
+}
+function decode(z, target) {
+  for (let i = 0; i < H1; i++) { let s = P[iD1b + i]; const r = iD1 + i * Z; for (let j = 0; j < Z; j++) s += P[r + j] * z[j]; h2[i] = Math.tanh(s); }
+  for (let i = 0; i < IN; i++) { let s = P[iD2b + i]; const r = iD2 + i * H1; for (let j = 0; j < H1; j++) s += P[r + j] * h2[j]; target[i] = s; }
+}
+function trainStep(batch) {
+  G.fill(0); let loss = 0;
+  for (let b = 0; b < batch; b++) {
+    const off = (Math.random() * nData | 0) * IN;
+    encode(off); decode(zv, xo);
+    dh.fill(0);
+    for (let i = 0; i < IN; i++) {
+      const y = 1 / (1 + Math.exp(-xo[i])), t = data[off + i], e = y - t;
+      loss += -(t * Math.log(y + 1e-7) + (1 - t) * Math.log(1 - y + 1e-7));
+      G[iD2b + i] += e;
+      const r = iD2 + i * H1;
+      for (let j = 0; j < H1; j++) { G[r + j] += e * h2[j]; dh[j] += e * P[r + j]; }
+    }
+    dz.fill(0);
+    for (let i = 0; i < H1; i++) {
+      const d = dh[i] * (1 - h2[i] * h2[i]), r = iD1 + i * Z;
+      G[iD1b + i] += d;
+      for (let j = 0; j < Z; j++) { G[r + j] += d * zv[j]; dz[j] += d * P[r + j]; }
+    }
+    dh.fill(0);
+    for (let i = 0; i < Z; i++) {
+      const d = dz[i], r = iE2 + i * H1;
+      G[iE2b + i] += d;
+      for (let j = 0; j < H1; j++) { G[r + j] += d * h1[j]; dh[j] += d * P[r + j]; }
+    }
+    for (let i = 0; i < H1; i++) {
+      const d = dh[i] * (1 - h1[i] * h1[i]), r = iE1 + i * IN;
+      G[iEb + i] += d;
+      for (let j = 0; j < IN; j++) G[r + j] += d * data[off + j];
+    }
+  }
+  adamT++;
+  const c1 = 1 - Math.pow(.9, adamT), c2 = 1 - Math.pow(.999, adamT), lr = Math.max(.0005, .0025 * Math.pow(.5, stepN / 1200));
+  for (let i = 0; i < SIZE; i++) {
+    const d = G[i] / batch;
+    m[i] = .9 * m[i] + .1 * d; v[i] = .999 * v[i] + .001 * d * d;
+    P[i] -= lr * (m[i] / c1) / (Math.sqrt(v[i] / c2) + 1e-8);
+  }
+  stepN++;
+  return loss / (batch * IN);
+}
+// The average code for each letter: its address in the model's memory.
+function letterCodes() {
+  const sum = new Float32Array(26 * Z), count = new Uint16Array(26);
+  for (let k = 0; k < nData; k++) { encode(k * IN); const l = labels[k]; count[l]++; for (let i = 0; i < Z; i++) sum[l * Z + i] += zv[i]; }
+  for (let l = 0; l < 26; l++) for (let i = 0; i < Z; i++) sum[l * Z + i] /= count[l] || 1;
+  return sum;
+}
+function axes2D(codes) {
+  const mean = new Float32Array(Z), rows = [];
+  for (let l = 0; l < 26; l++) for (let i = 0; i < Z; i++) mean[i] += codes[l * Z + i] / 26;
+  for (let l = 0; l < 26; l++) { const r = new Float32Array(Z); for (let i = 0; i < Z; i++) r[i] = codes[l * Z + i] - mean[i]; rows.push(r); }
+  const axes = [];
+  for (let c = 0; c < 2; c++) {
+    let w = new Float32Array(Z).map((_, i) => Math.sin(i * 1.3 + c * 2 + 1));
+    for (let it = 0; it < 14; it++) {
+      const n = new Float32Array(Z);
+      for (const r of rows) { let s = 0; for (let i = 0; i < Z; i++) s += r[i] * w[i]; for (let i = 0; i < Z; i++) n[i] += s * r[i]; }
+      for (const a of axes) { let s = 0; for (let i = 0; i < Z; i++) s += n[i] * a[i]; for (let i = 0; i < Z; i++) n[i] -= s * a[i]; }
+      let l = 0; for (let i = 0; i < Z; i++) l += n[i] * n[i]; l = Math.sqrt(l) || 1;
+      for (let i = 0; i < Z; i++) n[i] /= l;
+      w = n;
+    }
+    axes.push(w);
+  }
+  return rows.map(r => axes.map(a => { let s = 0; for (let i = 0; i < Z; i++) s += r[i] * a[i]; return s; }));
+}
+const phraseCodes = (codes, text) => [...text].map(ch => { const l = ALPHA.indexOf(ch); return l < 0 ? null : codes.subarray(l * Z, (l + 1) * Z); });
+function decodePhrase(codesA, codesB, t) {
+  const out = new Float32Array(codesA.length * IN), alpha = new Float32Array(codesA.length), z = new Float32Array(Z);
+  for (let k = 0; k < codesA.length; k++) {
+    const a = codesA[k], b = codesB[k], fa = a ? 1 : 0, fb = b ? 1 : 0;
+    alpha[k] = fa * (1 - t) + fb * t;
+    if (!alpha[k]) continue;
+    for (let i = 0; i < Z; i++) z[i] = (a || b)[i] * (1 - t) + (b || a)[i] * t;
+    decode(z, xo);
+    const o = k * IN;
+    for (let i = 0; i < IN; i++) out[o + i] = 1 / (1 + Math.exp(-xo[i]));
+  }
+  return { out, alpha };
+}
+let phrases, lastReport = 0;
+function report(done) {
+  const codes = letterCodes(), cur = phraseCodes(codes, phrases[0]), { out, alpha } = decodePhrase(cur, cur, 0);
+  const pairs = new Float32Array(IN * 2 * 8);
+  for (let k = 0; k < 8; k++) {
+    const off = (Math.random() * nData | 0) * IN;
+    pairs.set(data.subarray(off, off + IN), k * 2 * IN);
+    encode(off); decode(zv, xo);
+    for (let i = 0; i < IN; i++) pairs[(k * 2 + 1) * IN + i] = 1 / (1 + Math.exp(-xo[i]));
+  }
+  postMessage({ type: "report", step: stepN, loss: ema, hero: out, alpha, map: axes2D(codes), pairs, done }, [out.buffer, alpha.buffer, pairs.buffer]);
+}
+function burst() {
+  if (!running) return;
+  const t0 = performance.now();
+  while (performance.now() - t0 < 80) { const l = trainStep(12); ema = ema === null ? l : ema * .97 + l * .03; }
+  const done = stepN >= MAX;
+  if (done) { running = false; report(true); return; }
+  if (performance.now() - lastReport > 280) { lastReport = performance.now(); report(false); }
+  setTimeout(burst, 70);
+}
+// After training, walk through latent space from one phrase to the next, then stop on the name.
+function morph() {
+  const codes = letterCodes(), list = phrases.concat(phrases[0]);
+  let idx = 0, t = 0, hold = 80, last = performance.now();
+  (function tick() {
+    const now = performance.now(), dt = now - last; last = now;
+    if (hold > 0) { hold -= dt / 40; setTimeout(tick, 60); return; }
+    t = Math.min(1, t + dt / 1700);
+    const e = t * t * (3 - 2 * t), { out, alpha } = decodePhrase(phraseCodes(codes, list[idx]), phraseCodes(codes, list[idx + 1]), e);
+    postMessage({ type: "morph", hero: out, alpha }, [out.buffer, alpha.buffer]);
+    if (t === 1) {
+      t = 0; idx++; hold = 90;
+      if (idx >= list.length - 1) { postMessage({ type: "finished" }); return; }
+      postMessage({ type: "phrase", index: idx });
+    }
+    setTimeout(tick, 42);
+  })();
+}
+onmessage = ({ data: d }) => {
+  if (d.type === "init") { IN = d.size * d.size; data = d.data; labels = d.labels; nData = labels.length; phrases = d.phrases; MAX = d.maxSteps; setup(); postMessage({ type: "params", n: SIZE }); burst(); }
+  if (d.type === "morph") morph();
+  if (d.type === "pause") running = false;
+  if (d.type === "resume" && !running && stepN < MAX) { running = true; burst(); }
+};
+</script>
+<script>
+{
+const S = SITE, $ = id => document.getElementById(id), tier = S.tier();
+$("sr").textContent = S.full; $("who").textContent = S.full; $("role").textContent = "ML · Software · Electrical · Pilot";
+$("gh").href = S.github; $("li").href = S.linkedin;
+const SIZE = 22, COLS = 10, ROWS = 2;
+const FONTS = ['900 19px "Arial Black",Arial,sans-serif', 'bold 20px Arial,sans-serif', 'bold 20px Helvetica,Arial,sans-serif', 'bold 20px Georgia,serif', 'bold 19px Verdana,sans-serif', 'bold 20px Tahoma,sans-serif', 'bold 20px "Trebuchet MS",sans-serif', 'bold 20px Impact,sans-serif'];
+const ALPHA = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+function dataset() {
+  const m = document.createElement("canvas"); m.width = m.height = SIZE;
+  const g = m.getContext("2d", { willReadFrequently: true }), out = [], labels = [];
+  for (let l = 0; l < 26; l++) for (const f of FONTS) for (let j = 0; j < 3; j++) {
+    g.clearRect(0, 0, SIZE, SIZE); g.font = f; g.textAlign = "center"; g.textBaseline = "middle"; g.fillStyle = "#fff";
+    g.fillText(ALPHA[l], SIZE / 2 + (j ? (Math.random() - .5) * 1.6 : 0), SIZE / 2 + 1 + (j ? (Math.random() - .5) * 1.6 : 0));
+    const d = g.getImageData(0, 0, SIZE, SIZE).data;
+    for (let i = 0; i < SIZE * SIZE; i++) out.push(d[i * 4 + 3] / 255);
+    labels.push(l);
+  }
+  return { data: Float32Array.from(out), labels: Uint8Array.from(labels) };
+}
+const pad = (a, b) => { const c = s => { const n = COLS - s.length, l = n >> 1; return " ".repeat(l) + s + " ".repeat(n - l); }; return c(a) + c(b); };
+const fitName = s => s.toUpperCase().replace(/[^A-Z]/g, "").slice(0, COLS);
+const phrases = [pad(fitName(S.first), fitName(S.last)), pad("MACHINE", "LEARNING"), pad("SOFTWARE", "ENGINEER"), pad("ELECTRICAL", "ENGINEER"), pad("PRIVATE", "PILOT")];
+
+const STOPS = [[5, 4, 15], [38, 28, 110], [40, 130, 220], [74, 255, 195], [255, 255, 255]];
+const LUT = new Uint8Array(768);
+for (let i = 0; i < 256; i++) { const t = i / 255 * (STOPS.length - 1), a = Math.min(t | 0, STOPS.length - 2), f = t - a; for (let c = 0; c < 3; c++) LUT[i * 3 + c] = STOPS[a][c] + (STOPS[a + 1][c] - STOPS[a][c]) * f; }
+const hero = $("hero"), hx = hero.getContext("2d");
+const tile = document.createElement("canvas"); tile.width = tile.height = SIZE;
+const tx = tile.getContext("2d"), tileImg = tx.createImageData(SIZE, SIZE);
+let lastHero = null, lastAlpha = null;
+function paintTile(src, off, alpha, tint) {
+  const d = tileImg.data;
+  for (let i = 0; i < SIZE * SIZE; i++) {
+    const v = Math.min(255, src[off + i] * 255 * alpha | 0), o = i * 4;
+    d[o] = LUT[v * 3]; d[o + 1] = LUT[v * 3 + 1]; d[o + 2] = LUT[v * 3 + 2]; d[o + 3] = 255;
+    if (tint) { d[o] = Math.min(255, d[o] + (255 - d[o]) * tint * (v / 255)); d[o + 2] = d[o + 2] * (1 - tint * .4 * (v / 255)); }
+  }
+  tx.putImageData(tileImg, 0, 0);
+}
+function drawHero() {
+  if (!lastHero) return;
+  const r = hero.getBoundingClientRect(), dpr = Math.min(devicePixelRatio || 1, tier === 2 ? 1.5 : 1);
+  if (hero.width !== (r.width * dpr | 0) || hero.height !== (r.height * dpr | 0)) { hero.width = r.width * dpr; hero.height = r.height * dpr; }
+  hx.setTransform(dpr, 0, 0, dpr, 0, 0); hx.clearRect(0, 0, r.width, r.height);
+  hx.imageSmoothingEnabled = true; hx.imageSmoothingQuality = "high";
+  const cell = Math.min(r.width / COLS, r.height / ROWS * .96), ox = (r.width - cell * COLS) / 2, oy = (r.height - cell * ROWS) / 2;
+  hx.globalCompositeOperation = "lighter";
+  const n = SIZE * SIZE;
+  for (let k = 0; k < COLS * ROWS; k++) {
+    if (!lastAlpha[k]) continue;
+    paintTile(lastHero, k * n, lastAlpha[k], (k % COLS) / COLS * .5);
+    hx.drawImage(tile, ox + (k % COLS) * cell, oy + (k / COLS | 0) * cell, cell, cell);
+  }
+  hx.globalCompositeOperation = "source-over";
+}
+function fit(c) {
+  const r = c.getBoundingClientRect(), d = Math.min(devicePixelRatio || 1, 2);
+  if (r.width && c.width !== (r.width * d | 0)) { c.width = r.width * d; c.height = r.height * d; }
+  const g = c.getContext("2d"); g.setTransform(d, 0, 0, d, 0, 0); g.clearRect(0, 0, r.width, r.height);
+  return [g, r.width, r.height];
+}
+const losses = [];
+function drawCurve() {
+  const [g, w, h] = fit($("curve"));
+  if (losses.length < 2) return;
+  const lo = Math.min(...losses), hi = Math.max(...losses);
+  g.strokeStyle = "#4affc3"; g.lineWidth = 1.6; g.beginPath();
+  losses.forEach((v, i) => { const a = i / (losses.length - 1) * w, b = h - 2 - (v - lo) / (hi - lo || 1) * (h - 4); i ? g.lineTo(a, b) : g.moveTo(a, b); });
+  g.stroke();
+}
+function drawMap(map) {
+  const [g, w, h] = fit($("map"));
+  let mx = .001, my = .001;
+  for (const [a, b] of map) { mx = Math.max(mx, Math.abs(a)); my = Math.max(my, Math.abs(b)); }
+  g.font = "bold 12px ui-monospace,Menlo,monospace"; g.textAlign = "center"; g.textBaseline = "middle";
+  map.forEach(([a, b], i) => {
+    const t = i / 25, c = t < .5 ? "#4affc3" : "#ff8ac4";
+    g.fillStyle = c; g.fillText(ALPHA[i], w / 2 + a / mx * (w / 2 - 10), h / 2 + b / my * (h / 2 - 9));
+  });
+}
+function drawPairs(pairs) {
+  const [g, w, h] = fit($("pairs")), n = SIZE * SIZE, cols = 4, rows = 2, cw = w / cols, chh = h / rows;
+  g.imageSmoothingEnabled = true;
+  for (let k = 0; k < 8; k++) {
+    const x0 = (k % cols) * cw, y0 = (k / cols | 0) * chh, sz = Math.min(cw / 2 - 1, chh - 2);
+    paintTile(pairs, k * 2 * n, 1, 0); g.drawImage(tile, x0, y0, sz, sz);
+    paintTile(pairs, (k * 2 + 1) * n, 1, 0); g.drawImage(tile, x0 + sz + 1, y0, sz, sz);
+  }
+}
+S.ready(() => {
+  const { data, labels } = dataset();
+  $("info").textContent = "26 letters · " + labels.length + " samples · 14 number memory";
+  const worker = new Worker(URL.createObjectURL(new Blob([$("wk").textContent], { type: "text/javascript" })));
+  worker.onmessage = ({ data: d }) => {
+    if (d.type === "report") {
+      $("loss").textContent = d.loss.toFixed(3);
+      losses.push(d.loss); if (losses.length > 260) losses.shift();
+      lastHero = d.hero; lastAlpha = d.alpha; drawHero(); drawCurve(); drawMap(d.map); drawPairs(d.pairs);
+      $("status").textContent = d.done ? "trained. walking through latent space." : "step " + d.step.toLocaleString() + ": learning to write";
+      if (d.done) worker.postMessage({ type: "morph" });
+    }
+    if (d.type === "morph") { lastHero = d.hero; lastAlpha = d.alpha; drawHero(); }
+    if (d.type === "finished") $("status").textContent = "done. your CPU is resting.";
+  };
+  worker.postMessage({ type: "init", data, labels, size: SIZE, phrases, maxSteps: [1200, 2000, 2800][tier] });
+  document.addEventListener("visibilitychange", () => worker.postMessage({ type: document.hidden ? "pause" : "resume" }));
+  let rt; addEventListener("resize", () => { clearTimeout(rt); rt = setTimeout(drawHero, 120); });
+});
+}
+</script>
+</body>
+</html>

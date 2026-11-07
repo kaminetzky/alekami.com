@@ -1,0 +1,224 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#030208">
+<style>
+*{box-sizing:border-box}
+html,body{height:100%;margin:0;background:#030208;color:#f4f0ff;overflow:hidden;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+#c{position:fixed;inset:0;width:100%;height:100%;display:block}
+h1{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}
+.hud{position:fixed;left:clamp(16px,3vw,36px);right:clamp(16px,3vw,36px);top:max(16px,env(safe-area-inset-top));display:flex;justify-content:space-between;gap:12px;font-size:12px;color:#b5abd8;pointer-events:none}
+.hud b{color:#ffd166;font-weight:700}
+#cap{position:fixed;left:0;right:0;top:12vh;text-align:center;font-size:clamp(13px,1.4vw,18px);letter-spacing:.3em;text-transform:uppercase;color:#fff;pointer-events:none;padding:0 16px;transition:opacity .4s}
+.foot{position:fixed;left:0;right:0;bottom:0;display:flex;justify-content:space-between;align-items:flex-end;gap:12px;flex-wrap:wrap;padding:0 clamp(16px,3vw,36px) max(18px,env(safe-area-inset-bottom));pointer-events:none}
+.tag{font-size:12px;color:#b5abd8}.tag b{display:block;color:#fff;font-size:14px;font-weight:600;margin-bottom:2px}
+.links{display:flex;gap:10px;pointer-events:auto}
+a{color:#fff;text-decoration:none;border:1px solid #ffffff77;padding:10px 18px;font-size:13px;border-radius:99px;background:#ffffff12}
+a:hover,a:focus-visible{background:#fff;color:#030208}
+</style>
+</head>
+<body>
+<h1 id="sr"></h1>
+<canvas id="c" role="img" aria-label="Glowing blobs arranged by gradient descent to paint this person's name"></canvas>
+<div class="hud"><span><span id="n"></span> splats · iteration <b id="it">0</b></span><span>loss <b id="loss">...</b></span></div>
+<div id="cap" aria-hidden="true"></div>
+<div class="foot">
+  <div class="tag"><b id="role"></b>Every blob is optimized by gradient descent, live on your device.</div>
+  <div class="links"><a id="gh" rel="me noopener">GitHub</a><a id="li" rel="me noopener">LinkedIn</a></div>
+</div>
+<script src="../config.js"></script>
+<script src="shapes.js"></script>
+<script id="wk" type="text/plain">
+// 2D Gaussian splatting: render blobs, compare with the target, follow the gradient, then repeat.
+let W, H, N, P, m, v, g, img, tgt, t = 0, adamT = 0, sigmaMax = 12, iter = 0, stageIter = 0, stageLen = 260, running = false, targets = [], stage = 0, ema = null;
+// P layout per splat: x y logSigma r g b
+function init(n, w, h) {
+  N = n; W = w; H = h; P = new Float32Array(N * 6); m = new Float32Array(N * 6); v = new Float32Array(N * 6); g = new Float32Array(N * 6); img = new Float32Array(W * H * 3);
+  for (let i = 0; i < N; i++) {
+    const o = i * 6;
+    P[o] = Math.random() * W; P[o + 1] = Math.random() * H; P[o + 2] = Math.log(5 + Math.random() * 3);
+    P[o + 3] = Math.random() * .08; P[o + 4] = Math.random() * .08; P[o + 5] = Math.random() * .08;
+  }
+}
+function iterate() {
+  img.fill(0); g.fill(0);
+  for (let i = 0; i < N; i++) {
+    const o = i * 6, x = P[o], y = P[o + 1], s = Math.exp(P[o + 2]), R = Math.ceil(s * 2.6), q = 1 / (2 * s * s), r = P[o + 3], gr = P[o + 4], b = P[o + 5];
+    const x0 = Math.max(0, x - R | 0), x1 = Math.min(W - 1, x + R | 0), y0 = Math.max(0, y - R | 0), y1 = Math.min(H - 1, y + R | 0);
+    for (let py = y0; py <= y1; py++) for (let px = x0; px <= x1; px++) {
+      const dx = px - x, dy = py - y, w = Math.exp(-(dx * dx + dy * dy) * q), k = (py * W + px) * 3;
+      img[k] += r * w; img[k + 1] += gr * w; img[k + 2] += b * w;
+    }
+  }
+  let loss = 0;
+  for (let i = 0; i < img.length; i++) { const e = img[i] - tgt[i]; loss += e * e; }
+  for (let i = 0; i < N; i++) {
+    const o = i * 6, x = P[o], y = P[o + 1], s = Math.exp(P[o + 2]), R = Math.ceil(s * 2.6), s2 = s * s, q = 1 / (2 * s2), r = P[o + 3], gr = P[o + 4], b = P[o + 5];
+    const x0 = Math.max(0, x - R | 0), x1 = Math.min(W - 1, x + R | 0), y0 = Math.max(0, y - R | 0), y1 = Math.min(H - 1, y + R | 0);
+    let gx = 0, gy = 0, gs = 0, g0 = 0, g1 = 0, g2 = 0;
+    for (let py = y0; py <= y1; py++) for (let px = x0; px <= x1; px++) {
+      const dx = px - x, dy = py - y, d2 = dx * dx + dy * dy, w = Math.exp(-d2 * q), k = (py * W + px) * 3;
+      const e0 = img[k] - tgt[k], e1 = img[k + 1] - tgt[k + 1], e2 = img[k + 2] - tgt[k + 2];
+      const dot = (e0 * r + e1 * gr + e2 * b) * w;
+      g0 += e0 * w; g1 += e1 * w; g2 += e2 * w;
+      gx += dot * dx / s2; gy += dot * dy / s2; gs += dot * d2 / s2;
+    }
+    g[o] = gx; g[o + 1] = gy; g[o + 2] = gs; g[o + 3] = g0; g[o + 4] = g1; g[o + 5] = g2;
+  }
+  adamT++;
+  const c1 = 1 - Math.pow(.85, adamT), c2 = 1 - Math.pow(.99, adamT), LR = [.55, .55, .022, .02, .02, .02];
+  for (let i = 0; i < N * 6; i++) {
+    m[i] = .85 * m[i] + .15 * g[i]; v[i] = .99 * v[i] + .01 * g[i] * g[i];
+    P[i] -= LR[i % 6] * (m[i] / c1) / (Math.sqrt(v[i] / c2) + 1e-8);
+  }
+  // Shrink the allowed blob size over the stage, from rough shapes to fine detail.
+  const prog = Math.min(1, stageIter / (stageLen * .6)), maxLog = Math.log(sigmaMax + (2.4 - sigmaMax) * prog), minLog = Math.log(1.1);
+  for (let i = 0; i < N; i++) {
+    const o = i * 6;
+    P[o] = Math.max(0, Math.min(W, P[o])); P[o + 1] = Math.max(0, Math.min(H, P[o + 1]));
+    P[o + 2] = Math.max(minLog, Math.min(maxLog, P[o + 2]));
+    for (let c = 3; c < 6; c++) P[o + c] = Math.max(0, Math.min(1.2, P[o + c]));
+  }
+  // Densify: blobs that faded out jump to where the error is highest, as in real 3D Gaussian splatting.
+  if (iter % 24 === 0) {
+    for (let i = 0; i < N; i++) {
+      const o = i * 6;
+      if (P[o + 3] + P[o + 4] + P[o + 5] > .12) continue;
+      let bestE = -1, bx = 0, by = 0;
+      for (let k = 0; k < 40; k++) {
+        const px = Math.random() * W | 0, py = Math.random() * H | 0, q = (py * W + px) * 3;
+        const e = Math.abs(img[q] - tgt[q]) + Math.abs(img[q + 1] - tgt[q + 1]) + Math.abs(img[q + 2] - tgt[q + 2]);
+        if (e > bestE) { bestE = e; bx = px; by = py; }
+      }
+      const q = (by * W + bx) * 3;
+      P[o] = bx; P[o + 1] = by; P[o + 3] = tgt[q] * .5; P[o + 4] = tgt[q + 1] * .5; P[o + 5] = tgt[q + 2] * .5;
+      P[o + 2] = Math.log(Math.max(1.6, sigmaMax + (2.4 - sigmaMax) * prog) * .7);
+      for (let c = 0; c < 6; c++) m[o + c] = v[o + c] = 0;
+    }
+  }
+  iter++; stageIter++;
+  return loss / img.length;
+}
+function setStage(s) {
+  stage = s; stageIter = 0; tgt = targets[s]; adamT = 0; m.fill(0); v.fill(0);
+  postMessage({ type: "stage", index: s });
+}
+function burst() {
+  if (!running) return;
+  const t0 = performance.now();
+  const l = iterate();
+  ema = ema === null ? l : ema * .9 + l * .1;
+  const copy = P.slice();
+  postMessage({ type: "frame", P: copy, iter, loss: ema }, [copy.buffer]);
+  if (stageIter >= stageLen) {
+    if (stage < targets.length - 1) setStage(stage + 1);
+    else { running = false; postMessage({ type: "done" }); return; }
+  }
+  setTimeout(burst, Math.max(4, 33 - (performance.now() - t0)));
+}
+onmessage = ({ data }) => {
+  if (data.type === "init") { init(data.n, data.w, data.h); targets = data.targets; stageLen = data.stageLen; setStage(0); running = true; burst(); }
+  if (data.type === "pause") running = false;
+  if (data.type === "resume" && !running && !(stage === targets.length - 1 && stageIter >= stageLen)) { running = true; burst(); }
+};
+</script>
+<script>
+{
+const S = SITE, $ = id => document.getElementById(id);
+$("sr").textContent = S.full; $("role").textContent = S.full;
+$("gh").href = S.github; $("li").href = S.linkedin;
+const c = $("c"), gl = c.getContext("webgl", { antialias: false, alpha: false, powerPreference: "high-performance" });
+if (!gl) { S.noWebGL(); throw new Error("WebGL unavailable"); }
+const tier = S.tier(gl), N = [200, 300, innerWidth < 700 ? 340 : 480][tier];
+$("n").textContent = N;
+const VS = `attribute vec2 aP; attribute float aS; attribute vec3 aC; uniform vec2 uR; uniform float uK; varying vec3 vC;
+void main(){ vC=aC; gl_Position=vec4(aP.x/uR.x*2.-1.,1.-aP.y/uR.y*2.,0.,1.); gl_PointSize=aS*uK; }`;
+const FS = `precision mediump float; varying vec3 vC;
+void main(){ vec2 q=gl_PointCoord-.5; float d=dot(q,q)*2.*5.2*5.2/2.; gl_FragColor=vec4(vC*exp(-d*1.),1.); }`;
+const prog = gl.createProgram();
+for (const [t, s] of [[gl.VERTEX_SHADER, VS], [gl.FRAGMENT_SHADER, FS]]) { const o = gl.createShader(t); gl.shaderSource(o, s); gl.compileShader(o); gl.attachShader(prog, o); }
+gl.linkProgram(prog); gl.useProgram(prog);
+const buf = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+const aP = gl.getAttribLocation(prog, "aP"), aS = gl.getAttribLocation(prog, "aS"), aC = gl.getAttribLocation(prog, "aC");
+for (const a of [aP, aS, aC]) gl.enableVertexAttribArray(a);
+gl.vertexAttribPointer(aP, 2, gl.FLOAT, false, 24, 0); gl.vertexAttribPointer(aS, 1, gl.FLOAT, false, 24, 8); gl.vertexAttribPointer(aC, 3, gl.FLOAT, false, 24, 12);
+gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE); gl.clearColor(.012, .008, .03, 1);
+const uR = gl.getUniformLocation(prog, "uR"), uK = gl.getUniformLocation(prog, "uK");
+
+let GW, GH, shown, latest;
+const CAPS = ["", "Private pilot", "Machine learning", "Electrical", ""];
+function targetsFor() {
+  const painters = [];
+  const narrow = innerWidth / innerHeight < 1;
+  const grad = g => { const l = g.createLinearGradient(0, 0, GW, GH); l.addColorStop(0, "#37ffc0"); l.addColorStop(.45, "#5f8cff"); l.addColorStop(.8, "#ff4fa3"); l.addColorStop(1, "#ffc861"); return l; };
+  const words = (g) => {
+    const lines = narrow ? S.lines(true) : [S.first.toUpperCase(), S.last.toUpperCase()], face = '900 100px "Arial Black","Helvetica Neue",Arial,sans-serif';
+    g.font = face;
+    const wd = Math.max(...lines.map(l => g.measureText(l).width)), box = narrow ? .68 : .74;
+    const size = Math.min(100 * GW * .93 / wd, GH * box / lines.length);
+    g.font = face.replace("100px", size + "px");
+    g.textAlign = "center"; g.textBaseline = "middle"; g.fillStyle = grad(g);
+    lines.forEach((l, i) => g.fillText(l, GW / 2, GH * .49 + (i - (lines.length - 1) / 2) * size * 1.03));
+  };
+  const art = (key, lw) => g => {
+    const sh = SHAPES[key], s = Math.min(GW * .84 / sh.w, GH * .6 / sh.h);
+    g.save(); g.translate((GW - sh.w * s) / 2, (GH - sh.h * s) / 2); g.scale(s, s);
+    g.strokeStyle = grad(g); g.lineWidth = lw; g.lineJoin = g.lineCap = "round"; g.stroke(new Path2D(sh.d)); g.restore();
+  };
+  for (const p of [words, art("plane", 4), art("net", 2.6), art("chip", 4.5), words]) {
+    const m = document.createElement("canvas"); m.width = GW; m.height = GH;
+    const g = m.getContext("2d", { willReadFrequently: true });
+    g.fillStyle = "#000"; g.fillRect(0, 0, GW, GH); p(g);
+    const d = g.getImageData(0, 0, GW, GH).data, t = new Float32Array(GW * GH * 3);
+    for (let i = 0; i < GW * GH; i++) { t[i * 3] = d[i * 4] / 255; t[i * 3 + 1] = d[i * 4 + 1] / 255; t[i * 3 + 2] = d[i * 4 + 2] / 255; }
+    painters.push(t);
+  }
+  return painters;
+}
+function size() {
+  const dpr = Math.min(devicePixelRatio || 1, tier === 2 ? 1.5 : 1);
+  c.width = innerWidth * dpr; c.height = innerHeight * dpr; gl.viewport(0, 0, c.width, c.height);
+}
+let dirty = false, loopOn = true;
+function frame() {
+  if (!loopOn) return;
+  requestAnimationFrame(frame);
+  if (!latest || document.hidden) return;
+  if (!shown) shown = latest.slice();
+  // Ease toward the newest optimizer state so the motion stays fluid between updates.
+  let moved = 0;
+  for (let i = 0; i < shown.length; i++) { const d = latest[i] - shown[i]; shown[i] += d * .35; moved += Math.abs(d); }
+  const v = new Float32Array(N * 6), k = c.width / GW;
+  for (let i = 0; i < N; i++) {
+    const o = i * 6;
+    v[o] = shown[o]; v[o + 1] = shown[o + 1]; v[o + 2] = Math.exp(shown[o + 2]) * 5.2;
+    v[o + 3] = shown[o + 3]; v[o + 4] = shown[o + 4]; v[o + 5] = shown[o + 5];
+  }
+  gl.clear(gl.COLOR_BUFFER_BIT);
+  gl.uniform2f(uR, GW, GH); gl.uniform1f(uK, k);
+  gl.bufferData(gl.ARRAY_BUFFER, v, gl.DYNAMIC_DRAW);
+  gl.drawArrays(gl.POINTS, 0, N);
+  if (finished && moved < .05) loopOn = false;
+}
+let finished = false;
+S.ready(() => {
+  size();
+  const asp = innerWidth / innerHeight;
+  GW = asp < 1 ? [90, 120, 140][tier] : [130, 170, 210][tier]; GH = Math.round(GW / asp);
+  const worker = new Worker(URL.createObjectURL(new Blob([$("wk").textContent], { type: "text/javascript" })));
+  worker.onmessage = ({ data }) => {
+    if (data.type === "frame") { latest = data.P; $("it").textContent = data.iter; $("loss").textContent = data.loss.toFixed(4); }
+    if (data.type === "stage") { const cap = $("cap"); cap.style.opacity = 0; setTimeout(() => { cap.textContent = CAPS[data.index]; cap.style.opacity = 1; }, 350); }
+    if (data.type === "done") finished = true;
+  };
+  worker.postMessage({ type: "init", n: N, w: GW, h: GH, targets: targetsFor(), stageLen: [120, 170, 190][tier] });
+  document.addEventListener("visibilitychange", () => worker.postMessage({ type: document.hidden ? "pause" : "resume" }));
+  frame();
+});
+addEventListener("resize", size);
+}
+</script>
+</body>
+</html>

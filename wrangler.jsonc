@@ -1,0 +1,14 @@
+// The live personal site: static files from site/ (built by build.sh), on alekami.com.
+// worker.js runs first on every request and redirects the other addresses to alekami.com.
+{
+  "name": "alekami-site",
+  "compatibility_date": "2026-11-01",
+  "main": "worker.js",
+  "assets": { "directory": "./site", "binding": "ASSETS", "run_worker_first": true },
+  "routes": [
+    { "pattern": "alekami.com", "custom_domain": true },
+    { "pattern": "www.alekami.com", "custom_domain": true },
+    { "pattern": "alexkaminetzky.com", "custom_domain": true },
+    { "pattern": "www.alexkaminetzky.com", "custom_domain": true }
+  ]
+}

@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Website options</title>
+<style>
+:root{--bg:#0b0c0e;--panel:#15171b;--line:#2a2d33;--fg:#f1f2f4;--dim:#9096a0;--hot:#7dff9b}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0;background:var(--bg);color:var(--fg);font:14px/1.35 ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif}
+body{display:flex;flex-direction:column;overflow:hidden}
+header{display:flex;align-items:center;gap:8px;padding:8px 12px;background:var(--panel);border-bottom:1px solid var(--line)}
+nav{display:flex;gap:4px;overflow-x:auto;flex:1;scrollbar-width:none}
+nav::-webkit-scrollbar{display:none}
+button,.btn{appearance:none;border:1px solid transparent;background:none;color:var(--dim);padding:7px 10px;border-radius:7px;cursor:pointer;font:inherit;white-space:nowrap;text-decoration:none}
+button:hover,.btn:hover{color:var(--fg);background:#22252a}
+button[aria-pressed=true]{color:#06140a;background:var(--hot);font-weight:600}
+.tools{display:flex;gap:4px;flex:none}
+.stage{flex:1;min-height:0;display:flex;align-items:center;justify-content:center;background:#050506}
+iframe{width:100%;height:100%;border:0;display:block;background:#000}
+.phone iframe{width:390px;height:min(780px,100%);border:1px solid var(--line);border-radius:18px}
+footer{padding:7px 12px;color:var(--dim);border-top:1px solid var(--line);background:var(--panel);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+footer b{color:var(--fg);font-weight:600}
+@media (max-width:720px){.device{display:none}footer{white-space:normal}}
+</style>
+</head>
+<body>
+<header>
+  <nav id="tabs" aria-label="Options"></nav>
+  <div class="tools">
+    <button class="device" id="desktop" aria-pressed="true">Desktop</button>
+    <button class="device" id="phone" aria-pressed="false">Phone</button>
+    <a class="btn" href="options/08-photo-lab.html" target="_blank" rel="noopener" title="Not a site option: try your photo in six treatments. It stays in your browser.">Photo lab</a>
+    <a class="btn" id="open" target="_blank" rel="noopener">Open ↗</a>
+  </div>
+</header>
+<main class="stage" id="stage"><iframe id="frame" title="Option preview" allow="fullscreen"></iframe></main>
+<footer id="info"></footer>
+<script>
+const OPTIONS = [
+  ["Matrix", "01-matrix", "Digital rain carves your name out of falling code. Red pill is GitHub, blue pill is LinkedIn."],
+  ["Terminal", "02-terminal", "A CRT that boots up and actually works. Type help, or tap the commands. Try train, neofetch and sudo."],
+  ["Neural", "03-neural", "Not an image: a real neural net trains live in the visitor's browser until it learns to draw your name."],
+  ["Black hole", "04-singularity", "A GPU ray traced black hole bending light around your name. Move the pointer to orbit."],
+  ["Swarm", "05-swarm", "Tens of thousands of GPU particles morph between your name, a network and a knot. Pointer scatters them."],
+  ["Overload", "06-overload", "Maximum clutter. Glitch type, hazard tape and draggable stickers. Try clicking the popup."],
+  ["AK-OS", "07-os", "A fake vaporwave desktop with draggable windows, a live training chart and playable Snake."],
+  ["Loss landscape", "09-landscape", "SGD, momentum, Adam and RMSprop race downhill on a real 3D loss surface, with live losses in the legend."],
+  ["ASCII 3D", "10-ascii", "Your initials as a solid, lit 3D object rendered entirely in text. Drag to spin it."],
+  ["Morphogen", "11-morphogen", "Your name grows organically from a reaction-diffusion equation. Draw on it to grow more."],
+  ["Neural Circuit", "12-circuit", "Real neural nets evolve live, learning to fly small planes around a circuit board trace."],
+  ["Drone Show", "13-droneshow", "A night drone light show over a runway forms your name, a plane, a quadcopter, a chip and a neural net."],
+  ["Flight Deck", "14-flightdeck", "A cockpit HUD over synthetic terrain with GitHub and LinkedIn as waypoints. Drag to hand fly it."],
+  ["Blueprint", "15-blueprint", "A signed engineering drawing wiring sensors through a neural net to a plane, a circuit and a drone."],
+  ["Autoland", "16-autoland", "Neural nets learn to land a plane from scratch. Each wave flies an approach, flare and touchdown in a simplified flight model."],
+  ["Tiny LM", "17-tinylm", "A small language model trains in your browser. The headline starts as gibberish and becomes your name."],
+  ["Logic Datasheet", "18-datasheet", "A neural net drawn as a real circuit. It trains itself into a logic gate, and its resistor color bands change as it learns."],
+  ["Drone Academy", "19-droneacademy", "One neural net learns to fly a quadcopter live. That same brain flies the whole fleet, so your name sharpens out of chaos as it trains."],
+  ["Flow Matching", "20-flow", "A tiny generative model, the same family as image generators, trains live and learns to turn pure noise into your name and what you do."],
+  ["Gaussian Splats", "21-splats", "Hundreds of glowing blobs are optimized by gradient descent to paint your name, a plane, a network and a chip."],
+  ["Latent Alphabet", "22-latent", "An autoencoder learns the alphabet from scratch, writes your name from its memory, then morphs it through what you do."],
+  ["Value Flood", "23-valueflood", "Reinforcement learning planning: value floods through corridors shaped like your name, and agents learn the way. Click to move the goal."],
+  ["Hopfield LED", "24-hopfield", "A neural associative memory on an LED matrix. It recalls your name and roles from noise. Drag across it to damage it and watch it heal."],
+  ["Embedding Map", "25-embedding", "Real t-SNE runs live on 70 concepts from your fields, which self-organize, and the crossovers land in between."],
+  ["Formation", "26-formation", "Flight Deck meets Drone Show. A drone fleet, flown by a neural net that trains live in your browser, forms your name ahead of the plane. Fly through it and the fleet scatters and regroups ahead."],
+  ["Chase Cam", "27-chase", "Formation from behind the plane. Watch a wireframe aircraft with nav lights and wingtip trails punch through the drone show, and the fleet scatter around it."],
+  ["Wingmen", "28-wingmen", "The fleet launches, then flies ahead of you like a banner, matching your speed and swinging as you turn. It morphs in flight, then slows so you fly through it."],
+  ["Murmuration", "29-murmuration", "Between formations the fleet swirls ahead of you like a flock of starlings, all flown by one brain trained in your browser, then condenses into the next word."],
+  ["Glass Cockpit", "30-glass", "Formation as a real glass cockpit: the flight display beside an MFD with a terrain map, the fleet's neural net firing live, and its training curve."],
+  ["Approach", "31-approach", "A real 3 degree ILS approach to a lit runway with a working PAPI, a touch and go, then a climb out through the drone formation. Repeats on new runways."],
+  ["Skytyping", "32-skytype", "Daylight from the ground: seven planes fly line abreast and puff your name in dot-matrix smoke, like real skytyping teams. Move the pointer to blow the smoke."],
+  ["Banner Tow", "33-banner", "Pixel art: a red biplane tows a waving banner with your name over a beach at sunset. Move the pointer to fly it up and down."],
+  ["Track Art", "34-tracks", "A flight tracking map where a Cessna's GPS track writes your name, coloured by altitude in the loss landscape palette."],
+  ["Radar Scope", "35-radar", "A green phosphor approach radar. Aircraft painted by the sweep leave history trails that spell your name, with data blocks."],
+  ["Thermal", "36-thermal", "Looking straight down through a drone's thermal camera: the fleet's hot motors gather into your name over fields and a river. Tap to change palette."],
+  ["Lake Show", "37-lake", "A night drone show over a lake: your name in 3D, then a plane and a quadcopter, reflected in the water while the camera drifts along the shore."],
+  ["Vector Canyon", "38-vector", "1980s arcade vector graphics: your name as giant 3D wireframe letters on a vector plain under a moon, seen from a banking aircraft."],
+  ["Pastel Day", "39-pastel", "Flight Deck reimagined in daylight: pastel toon terrain, a soft sky, and drones painting your name in solid colours. Drag to fly."],
+  ["ASCII Flight", "40-ascii-flight", "The whole 3D flight and drone formation rendered live as amber text characters on a CRT. Drag to fly."],
+  ["Neon Ribbon", "41-ribbon", "Minimal and dark: a glowing jet writes your name as one twisting neon ribbon in 3D, shedding sparks."],
+  ["Instant", "42-instant", "Formation with a brain trained ahead of time: the fleet is flying the moment the page opens. No warm-up."],
+  ["Fast Fleet", "43-fast", "Formation at double pace: the same neural net flies the drones twice as fast, the plane is quicker and passes come sooner."],
+  ["Learning Curve", "44-learning", "Training slowed down so every pass is flown by a better brain. Drones glow red when they're off their slot, with the live training curve on screen."],
+  ["Quadcopters", "45-quads", "Every drone is a little quadcopter whose arms bank with the attitude the neural net is flying, rotors glowing with thrust. Trains live."],
+  ["Comet Trails", "46-comets", "Each drone leaves a long glowing trail, so every regroup paints its flight paths across the sky."],
+  ["Typewriter", "47-typewriter", "Drones launch in reading order, so each formation types itself out left to right, line by line."],
+  ["Relay", "48-relay", "Two fleets take turns. While you fly through one formation the next is already waiting behind it, and the passed fleet leapfrogs ahead."],
+  ["Spectrum", "49-spectrum", "A denser fleet of smaller lights painted in a drifting rainbow, with the odd twinkle."],
+  ["Fireflies", "50-fireflies", "Drones learn to fly live, then their lights pulse like fireflies and fall into sync once they've settled into formation."],
+  ["Mixed Fleet", "51-mixed", "Big slow quadcopters with amber lights and small fast racers, all flown by one neural net trained live."],
+  ["Gusts", "52-gusts", "No pauses: a neural net trains flat out on a harder task, holding position in gusty wind, in a few seconds. Then the fleet flies through the same gusts."],
+  ["Real Motors", "53-motors", "No pauses: the drones' motors take time to spool up, so the net has to learn to correct early. Trains live in a few seconds."],
+  ["Bigger Brain", "54-bigbrain", "No pauses: a bigger two layer net trained live with evolution strategies, a gradient estimate plus Adam, in a few seconds."],
+  ["Population", "55-population", "Every drone flies a different candidate brain from the evolving population. The worst glow red and fall while evolution picks the best, live."],
+  ["Backprop", "56-backprop", "Gradient descent through the physics: a 64 neuron brain trained live by backpropagation through time, down to about 2 cm in about a second."],
+  ["Imitation", "57-imitation", "Imitation learning: the net learns live by copying a hand-tuned flight controller, which labels every state the student flies into."],
+  ["Cross-Entropy", "58-cem", "The cross-entropy method with its population on show: every drone flies a sampled brain, and the samples tighten round a good one."],
+  ["Particle Swarm", "59-swarm", "Particle swarm optimisation: every drone flies a particle in weight space, and the fleet converges as the swarm does."],
+  ["Training Race", "60-race", "Four methods race live, each flying a quarter of the name: genetic algorithm, evolution strategies, cross-entropy and backprop. Watch which part sharpens first."],
+];
+const tabs = document.getElementById("tabs"), frame = document.getElementById("frame"),
+      info = document.getElementById("info"), open = document.getElementById("open");
+let current = 0;
+function show(i) {
+  current = (i + OPTIONS.length) % OPTIONS.length;
+  const [name, file, blurb] = OPTIONS[current], url = "options/" + file + ".html";
+  frame.src = url; open.href = url;
+  info.innerHTML = "<b>" + name + ".</b> " + blurb;
+  [...tabs.children].forEach((b, j) => b.setAttribute("aria-pressed", j === current));
+  tabs.children[current].scrollIntoView({ inline: "center", block: "nearest" });
+  history.replaceState(null, "", "#" + file);
+}
+OPTIONS.forEach(([name], i) => {
+  const b = document.createElement("button");
+  b.textContent = (i + 1) + " " + name;
+  b.onclick = () => show(i);
+  tabs.append(b);
+});
+function device(phone) {
+  document.getElementById("stage").classList.toggle("phone", phone);
+  document.getElementById("phone").setAttribute("aria-pressed", phone);
+  document.getElementById("desktop").setAttribute("aria-pressed", !phone);
+  frame.src = frame.src;
+}
+document.getElementById("phone").onclick = () => device(true);
+document.getElementById("desktop").onclick = () => device(false);
+// Arrow keys belong to the option, so they fly the plane even before the preview has focus.
+const FLY_KEYS = /^(Arrow(Up|Down|Left|Right)|Key[WASD])$/;
+for (const type of ["keydown", "keyup"]) addEventListener(type, e => {
+  if (!FLY_KEYS.test(e.code) || e.metaKey || e.ctrlKey || e.altKey) return;
+  e.preventDefault();
+  try { frame.contentWindow.dispatchEvent(new KeyboardEvent(type, { code: e.code, key: e.key })); } catch (_) {}
+  if (type === "keydown") frame.focus();
+});
+show(Math.max(0, OPTIONS.findIndex(o => "#" + o[1] === location.hash)));
+</script>
+</body>
+</html>

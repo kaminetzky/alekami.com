@@ -1,0 +1,233 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0a0c0f">
+<style>
+html,body{height:100%;margin:0;background:#0a0c0f;color:#7dff9b;overflow:hidden;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;touch-action:none;user-select:none;-webkit-user-select:none}
+.box{position:fixed;overflow:hidden;background:#05060a;box-shadow:inset 0 0 0 1px #2b3340,0 0 0 4px #14181e}
+#pfd canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
+#hud{cursor:grab}
+#hud:active{cursor:grabbing}
+#m{position:absolute;left:0;top:0;width:100%;display:block}
+.keys{position:absolute;left:0;right:0;bottom:0;padding:8px 10px 10px;border-top:1px solid #2b3340;display:flex;flex-direction:column;gap:6px;background:#080a0e}
+h1{margin:0;font-size:clamp(14px,1.6vw,20px);font-weight:700;letter-spacing:.14em;text-transform:uppercase;color:#d4ffe0}
+.role{margin:0;font-size:11px;letter-spacing:.1em;color:#ffcf6a}
+.soft{display:flex;gap:8px}
+a{flex:1;text-align:center;color:#05060a;background:#7dff9b;text-decoration:none;padding:8px 6px;font-size:12px;font-weight:700;letter-spacing:.08em;border-radius:3px}
+a+a{background:#ffcf6a}
+a:hover,a:focus-visible{background:#fff}
+</style>
+</head>
+<body>
+<div class="box" id="pfd"><canvas id="c" aria-hidden="true"></canvas><canvas id="hud" aria-label="Primary flight display. The aircraft flies through drone formations of this person's name and fields. Drag to fly."></canvas></div>
+<div class="box" id="mfd">
+  <canvas id="m" role="img" aria-label="Multi-function display: terrain map, the fleet's neural network and its live training loss"></canvas>
+  <div class="keys" id="keys">
+    <h1 id="name"></h1>
+    <p class="role" id="role"></p>
+    <div class="soft"><a id="gh" rel="me noopener">GITHUB</a><a id="li" rel="me noopener">LINKEDIN</a></div>
+  </div>
+</div>
+<script src="../config.js"></script>
+<script src="shapes.js"></script>
+<script src="flight.js"></script>
+<script src="drone-sim.js"></script>
+<script src="fleet.js"></script>
+<script>
+{
+const S = SITE, FL = FLIGHT, $ = id => document.getElementById(id);
+$("name").textContent = S.full; $("role").textContent = S.role.toUpperCase() + " · PILOT";
+$("gh").href = S.github; $("li").href = S.linkedin;
+const c = $("c"), gl = c.getContext("webgl", { antialias: true, alpha: false, powerPreference: "high-performance" });
+if (!gl) { S.noWebGL(); throw new Error("WebGL unavailable"); }
+const still = matchMedia("(prefers-reduced-motion: reduce)").matches;
+const RES = [.55, .8, 1], tier = S.tier(gl), small = Math.min(innerWidth, innerHeight) < 600;
+let level = tier;
+const govern = S.governor(level, l => { level = l; size(); });
+const world = FL.scene(gl, [84, 120, small ? 100 : 150][tier]);
+const F = FL.aircraft(), fleet = FLEET.create(gl, world, [300, 650, small ? 800 : 1200][tier]), O = fleet.O;
+const hud = $("hud"), h = hud.getContext("2d"), st = FL.stick(hud, F);
+const m = $("m"), g = m.getContext("2d");
+
+// Layout: flight display and MFD side by side on wide screens, stacked on tall ones. The flight display sits at the origin so the stick lines up.
+let W, H, aspect = 1, MW = 0, MH = 0, md = 1, t0 = performance.now(), trainedIn = 0;
+function size() {
+  const iw = innerWidth, ih = innerHeight, wide = iw / ih >= 1.15, gap = 8;
+  const p = wide ? [0, 0, Math.round(iw * .62) - gap, ih] : [0, 0, iw, Math.round(ih * .55) - gap];
+  const q = wide ? [p[2] + gap * 2, gap, iw - p[2] - gap * 3, ih - gap * 2] : [gap, p[3] + gap * 2, iw - gap * 2, ih - p[3] - gap * 3];
+  for (const [el, r] of [[$("pfd"), p], [$("mfd"), q]]) Object.assign(el.style, { left: r[0] + "px", top: r[1] + "px", width: r[2] + "px", height: r[3] + "px" });
+  W = p[2]; H = p[3]; aspect = W / H;
+  const dpr = Math.min(devicePixelRatio || 1, small ? 1.5 : 1.75) * RES[level];
+  c.width = W * dpr; c.height = H * dpr; gl.viewport(0, 0, c.width, c.height);
+  hud.width = W * Math.min(devicePixelRatio || 1, 2); hud.height = H * Math.min(devicePixelRatio || 1, 2);
+  md = Math.min(devicePixelRatio || 1, 2); MW = q[2]; MH = q[3] - $("keys").offsetHeight;
+  m.style.height = MH + "px"; m.width = MW * md; m.height = MH * md;
+  tawsAt = -1;
+}
+
+// ---------- MFD ----------
+const CYAN = "#5fe3ff", PINK = "#ff6fb8", GREEN = FL.GREEN, AMBER = FL.AMBER, DIM = "#3a4656";
+function panel(x, y, w, ht, label) {
+  g.strokeStyle = "#2b3340"; g.lineWidth = 1; g.strokeRect(x + .5, y + .5, w - 1, ht - 1);
+  g.fillStyle = CYAN; g.font = "bold 10px ui-monospace,Menlo,monospace"; g.textAlign = "left"; g.textBaseline = "top";
+  g.fillText(label, x + 7, y + 6);
+}
+// Terrain awareness colours, refreshed a few times a second: red is at or above you, amber close below, green well below.
+const taws = document.createElement("canvas"), TN = 56; taws.width = taws.height = TN;
+const tg = taws.getContext("2d"), timg = tg.createImageData(TN, TN);
+let tawsAt = -1, tawsPsi = 0;
+const RANGE = 4200;
+function refreshTaws() {
+  const fx = Math.sin(F.psi), fz = Math.cos(F.psi), rx = fz, rz = -fx;
+  for (let j = 0; j < TN; j++) for (let i = 0; i < TN; i++) {
+    const lx = (i / (TN - 1) - .5) * 2 * RANGE, ly = (1 - j / (TN - 1)) * 2 * RANGE - RANGE * .55;
+    const dh = FL.terrain(F.x + rx * lx + fx * ly, F.z + rz * lx + fz * ly) - F.alt, o = (j * TN + i) * 4;
+    const col = dh > -30 ? [170, 30, 40] : dh > -150 ? [150, 110, 20] : dh > -320 ? [20, 80, 40] : [8, 20, 18];
+    timg.data[o] = col[0]; timg.data[o + 1] = col[1]; timg.data[o + 2] = col[2]; timg.data[o + 3] = 255;
+  }
+  tg.putImageData(timg, 0, 0); tawsPsi = F.psi;
+}
+function drawMap(x, y, w, ht) {
+  panel(x, y, w, ht, w < 260 ? "MAP" : "MAP · TERRAIN · FLEET");
+  const cx = x + w / 2, cy = y + 18 + (ht - 18) * .72, px = Math.min(w, ht) * .5 / RANGE * 1.25;
+  g.save(); g.beginPath(); g.rect(x + 1, y + 18, w - 2, ht - 19); g.clip();
+  // The raster is heading up at the moment it was sampled; rotate it by any turn since.
+  g.save(); g.translate(cx, cy); g.rotate(tawsPsi - F.psi);
+  g.imageSmoothingEnabled = true; g.globalAlpha = .85;
+  g.drawImage(taws, -RANGE * px, -RANGE * 1.45 * px, RANGE * 2 * px, RANGE * 2 * px);
+  g.restore(); g.globalAlpha = 1;
+  const toMap = (wx, wz) => {
+    const dx = wx - F.x, dz = wz - F.z, fx = Math.sin(F.psi), fz = Math.cos(F.psi);
+    return [cx + (dx * fz - dz * fx) * px, cy - (dx * fx + dz * fz) * px];
+  };
+  // Range rings.
+  g.strokeStyle = "#ffffff30"; g.setLineDash([3, 4]);
+  for (const r of [926, 1852, 2778]) { g.beginPath(); g.arc(cx, cy, r * px, 0, 6.3); g.stroke(); }
+  g.setLineDash([]);
+  g.fillStyle = "#ffffff70"; g.font = "10px ui-monospace,Menlo,monospace"; g.textAlign = "left"; g.textBaseline = "middle";
+  g.fillText(".5", cx + 926 * px * .71 + 3, cy - 926 * px * .71); g.fillText("1 NM", cx + 1852 * px * .71 + 3, cy - 1852 * px * .71);
+  // Fleet and formation line.
+  const P = [0, 0, 0];
+  fleet.drones.forEach((d, i) => {
+    if (i % 3) return;
+    fleet.toWorld(d, P); const q = toMap(P[0], P[2]);
+    g.fillStyle = "rgb(" + (d.r * 255 | 0) + "," + (d.g * 255 | 0) + "," + (d.b * 255 | 0) + ")"; g.fillRect(q[0] - 1, q[1] - 1, 2, 2);
+  });
+  const sh = fleet.shape(), half = sh.w / 2 * fleet.K, a = toMap(O.x - O.lx * half, O.z - O.lz * half), b = toMap(O.x + O.lx * half, O.z + O.lz * half);
+  g.strokeStyle = PINK; g.lineWidth = 2; g.beginPath(); g.moveTo(a[0], a[1]); g.lineTo(b[0], b[1]); g.stroke();
+  // Track line and ownship.
+  g.strokeStyle = "#ffffffa0"; g.lineWidth = 1; g.setLineDash([5, 5]); g.beginPath(); g.moveTo(cx, cy); g.lineTo(cx, y + 18); g.stroke(); g.setLineDash([]);
+  g.fillStyle = "#fff"; g.beginPath(); g.moveTo(cx, cy - 9); g.lineTo(cx + 7, cy + 7); g.lineTo(cx, cy + 3); g.lineTo(cx - 7, cy + 7); g.closePath(); g.fill();
+  g.restore();
+  const hd = Math.round((F.psi * 57.3 + 360) % 360);
+  g.fillStyle = GREEN; g.font = "bold 11px ui-monospace,Menlo,monospace"; g.textAlign = "right"; g.textBaseline = "top";
+  g.fillText("HDG " + String(hd).padStart(3, "0") + "°", x + w - 7, y + 6);
+}
+// The fleet brain, drawn from its real weights, firing for one drone in real time.
+const IN = ["ΔX", "ΔY", "VX", "VY", "SIN", "COS", "Ω"], hidden = new Float64Array(12), outs = new Float64Array(2), inputs = new Float64Array(7);
+function drawNet(x, y, w, ht) {
+  panel(x, y, w, ht, w < 300 ? "BRAIN 7·12·2" : "FLEET BRAIN · 7·12·2 NEURAL NET");
+  const b = fleet.brain;
+  if (!b) { g.fillStyle = DIM; g.font = "11px ui-monospace,Menlo,monospace"; g.textAlign = "center"; g.fillText("WAITING FOR GENERATION 1", x + w / 2, y + ht / 2); return; }
+  const d = fleet.drones[0], cl = (v, lim) => v > lim ? lim : v < -lim ? -lim : v;
+  inputs.set([cl((d.tx - d.x) / 2, 1.5), cl((d.ty - d.y) / 2, 1.5), d.vx / 4, d.vy / 4, Math.sin(d.a), Math.cos(d.a), d.w / 4]);
+  for (let k = 0; k < 12; k++) { let v = b[k * 8 + 7]; for (let j = 0; j < 7; j++) v += b[k * 8 + j] * inputs[j]; hidden[k] = Math.tanh(v); }
+  for (let n = 0; n < 2; n++) { const o = 96 + n * 13; let v = b[o + 12]; for (let k = 0; k < 12; k++) v += b[o + k] * hidden[k]; outs[n] = .5 + .5 * Math.tanh(v); }
+  const top = y + 24, bot = y + ht - 10, col = [x + 34, x + w * .52, x + w - 46];
+  const ny = (i, n) => top + (bot - top) * (n === 1 ? .5 : i / (n - 1));
+  g.lineWidth = 1;
+  for (let k = 0; k < 12; k++) for (let j = 0; j < 7; j++) {
+    const wgt = b[k * 8 + j]; g.strokeStyle = (wgt > 0 ? "rgba(95,227,255," : "rgba(255,111,184,") + Math.min(.7, Math.abs(wgt) * .35) + ")";
+    g.beginPath(); g.moveTo(col[0], ny(j, 7)); g.lineTo(col[1], ny(k, 12)); g.stroke();
+  }
+  for (let n = 0; n < 2; n++) for (let k = 0; k < 12; k++) {
+    const wgt = b[96 + n * 13 + k]; g.strokeStyle = (wgt > 0 ? "rgba(95,227,255," : "rgba(255,111,184,") + Math.min(.8, Math.abs(wgt) * .3) + ")";
+    g.beginPath(); g.moveTo(col[1], ny(k, 12)); g.lineTo(col[2], ny(n, 2)); g.stroke();
+  }
+  const node = (cx, cy, v, r) => { g.fillStyle = v >= 0 ? "rgba(95,227,255," + (.2 + .8 * Math.min(1, Math.abs(v))) + ")" : "rgba(255,111,184," + (.2 + .8 * Math.min(1, -v)) + ")"; g.beginPath(); g.arc(cx, cy, r, 0, 6.3); g.fill(); };
+  g.font = "9px ui-monospace,Menlo,monospace"; g.textBaseline = "middle";
+  for (let j = 0; j < 7; j++) { node(col[0], ny(j, 7), inputs[j], 4); g.fillStyle = "#9fb0c4"; g.textAlign = "right"; g.fillText(IN[j], col[0] - 8, ny(j, 7)); }
+  for (let k = 0; k < 12; k++) node(col[1], ny(k, 12), hidden[k], 3.5);
+  for (let n = 0; n < 2; n++) {
+    const yy = ny(n, 2); node(col[2], yy, outs[n] * 2 - 1, 5);
+    g.fillStyle = "#1a222c"; g.fillRect(col[2] + 9, yy - 4, 30, 8); g.fillStyle = AMBER; g.fillRect(col[2] + 9, yy - 4, 30 * outs[n], 8);
+    g.fillStyle = "#9fb0c4"; g.textAlign = "left"; g.fillText(n ? "R" : "L", col[2] + 9, yy - 11);
+  }
+}
+function drawLoss(x, y, w, ht) {
+  panel(x, y, w, ht, w < 260 ? "TRAINING" : "TRAINING · POSITION ERROR");
+  const e = fleet.errs, L = v => Math.log10(Math.max(.05, Math.min(300, v)));
+  const gx = x + 40, gw = w - 50, gy = y + 24, gh = ht - 48, yv = v => gy + (1 - (L(v) - L(.05)) / (L(300) - L(.05))) * gh;
+  g.font = "9px ui-monospace,Menlo,monospace"; g.textAlign = "right"; g.textBaseline = "middle";
+  for (const v of [100, 10, 1, .1]) { g.strokeStyle = "#ffffff14"; g.beginPath(); g.moveTo(gx, yv(v)); g.lineTo(gx + gw, yv(v)); g.stroke(); g.fillStyle = "#7c8a9c"; g.fillText(v + " M", gx - 4, yv(v)); }
+  if (e.length) {
+    g.strokeStyle = GREEN; g.lineWidth = 1.5; g.beginPath();
+    e.forEach((v, i) => { const px = gx + i / Math.max(150, e.length) * gw; i ? g.lineTo(px, yv(v)) : g.moveTo(px, yv(v)); });
+    g.stroke();
+  }
+  g.font = "bold 11px ui-monospace,Menlo,monospace"; g.textAlign = "left"; g.textBaseline = "bottom";
+  g.fillStyle = fleet.trained ? GREEN : AMBER;
+  const status = !fleet.brain ? "STARTING WEB WORKER" : fleet.trained ? (w < 300 ? "TRAINED HERE · " : "TRAINED ON THIS DEVICE IN ") + trainedIn.toFixed(1) + " S" : "GEN " + fleet.gen + " · " + (fleet.err > 50 ? "CRASHING" : fleet.err.toFixed(2) + " M");
+  g.fillText(status, x + 7, y + ht - 6);
+}
+let mfdAt = 0;
+function drawMfd(t) {
+  if (t - mfdAt < 50) return; mfdAt = t;
+  if (t - tawsAt > 250) { refreshTaws(); tawsAt = t; }
+  g.setTransform(md, 0, 0, md, 0, 0); g.fillStyle = "#05060a"; g.fillRect(0, 0, MW, MH);
+  if (fleet.trained && !trainedIn) trainedIn = (t - t0) / 1000;
+  if (MW > MH * 1.25) { const lw = Math.round(MW * .5); drawMap(0, 0, lw, MH); drawNet(lw, 0, MW - lw, Math.round(MH * .56)); drawLoss(lw, Math.round(MH * .56), MW - lw, MH - Math.round(MH * .56)); }
+  else { const a = Math.round(MH * .44), b = Math.round(MH * .3); drawMap(0, 0, MW, a); drawNet(0, a, MW, b); drawLoss(0, a + b, MW, MH - a - b); }
+}
+
+// ---------- Flight and fleet ----------
+let clock = 0;
+function simulate(dt) {
+  const aim = fleet.aim(F);
+  FL.fly(F, dt, st.hand ? st.want(dt) : FL.autopilot(F, dt, aim.psi, aim.alt));
+  fleet.flythrough(F, dt, clock, 3000, .9, st.hand);
+  fleet.step(dt, F, fleet.shape().hue);
+}
+function draw(t) {
+  const cam = FL.basis(F), R = world.render(F, cam, aspect);
+  fleet.render({ R, P: F, aspect, height: c.height });
+  const mode = st.hand ? "HAND FLYING" : fleet.trained ? "AUTOPILOT · " + FL.FLY : "AUTOPILOT · FLEET TRAINING";
+  FL.hud(hud, h, W, H, F, mode, st.hand ? AMBER : GREEN, st);
+  const sh = fleet.shape(), tag = FL.project(cam, F, O.x, O.y + sh.h / 2 * fleet.K + 70, O.z, W, H);
+  if (!O.passed && sh.cap && tag.z > 300 && tag.x > 20 && tag.x < W - 20 && tag.y > 70 && tag.y < H - 20) {
+    h.fillStyle = PINK; h.font = "bold 12px ui-monospace,Menlo,monospace"; h.textAlign = "center"; h.textBaseline = "alphabetic";
+    h.fillText(sh.cap, tag.x, tag.y);
+  }
+  drawMfd(t);
+}
+let last = 0;
+function frame(t) {
+  requestAnimationFrame(frame);
+  if (document.hidden) { last = t; return; }
+  govern(t);
+  const dt = Math.min(.05, (t - last) / 1000); last = t; clock += dt;
+  simulate(dt); draw(t);
+}
+let rt, bw = innerWidth;
+addEventListener("resize", () => {
+  size(); if (still) draw(performance.now() + 1e5);
+  if (innerWidth === bw) return;
+  bw = innerWidth; clearTimeout(rt);
+  rt = setTimeout(() => { fleet.build(W / H < 1); fleet.assign(fleet.shape()); }, 150);
+});
+S.ready(() => {
+  bw = innerWidth; size(); fleet.build(W / H < 1);
+  fleet.anchorAhead(F, 3000, 0);
+  fleet.drones.forEach(fleet.park);
+  if (still) {
+    fleet.drones.forEach(d => { d.x = d.tx; d.y = d.ty; d.s = 0; });
+    F.x = O.x - O.ax * 1500; F.z = O.z - O.az * 1500; F.alt = O.y;
+    draw(performance.now() + 1e5);
+  } else { t0 = performance.now(); fleet.train(); requestAnimationFrame(frame); }
+});
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#07061a">
+<style>
+html,body{height:100%;margin:0;background:#07061a;color:#7dff9b;overflow:hidden;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;touch-action:none;user-select:none;-webkit-user-select:none}
+canvas{position:fixed;inset:0;width:100%;height:100%;display:block}
+#hud{cursor:grab}
+#hud:active{cursor:grabbing}
+.panel{position:fixed;left:50%;bottom:max(14px,env(safe-area-inset-bottom));transform:translateX(-50%);display:flex;flex-direction:column;align-items:center;gap:8px;width:min(100% - 24px,640px);pointer-events:none;text-align:center}
+h1{margin:0;font-size:clamp(16px,2.2vw,30px);font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:#d4ffe0;text-shadow:0 0 14px #2dff6e,0 1px 3px #000}
+.role{margin:0;font-size:clamp(10px,1.05vw,13px);letter-spacing:.12em;color:#ffcf6a;text-shadow:0 1px 3px #000;text-wrap:balance}
+.radio{display:flex;gap:10px;pointer-events:auto;width:100%;justify-content:center}
+a{flex:0 1 230px;color:#ffcf6a;background:#070a0cdd;border:1px solid #7dff9b66;text-decoration:none;padding:9px 10px;font-size:clamp(11px,1.1vw,13px);font-weight:700;letter-spacing:.06em;white-space:nowrap}
+a:hover,a:focus-visible{background:#7dff9b;color:#04140a}
+</style>
+</head>
+<body>
+<canvas id="c" aria-hidden="true"></canvas>
+<canvas id="hud" aria-label="Drones with long glowing trails form this person's name ahead of the aircraft. Drag to hand fly."></canvas>
+<div class="panel">
+  <h1 id="name"></h1>
+  <p class="role" id="role"></p>
+  <div class="radio">
+    <a id="gh" rel="me noopener">GITHUB</a>
+    <a id="li" rel="me noopener">LINKEDIN</a>
+  </div>
+</div>
+<script src="../config.js"></script>
+<script src="shapes.js"></script>
+<script src="flight.js"></script>
+<script src="drone-sim.js"></script>
+<script src="brain.js"></script>
+<script src="fleet.js"></script>
+<script src="formation-kit.js"></script>
+<script>
+{
+// Each drone leaves a long fading trail, so every regroup paints the sky with its flight paths.
+const TR = 14, EVERY = 1 / 30;
+let ring, head = 0, acc = 0, data;
+FORMKIT.start({
+  tagline: "A DRONE FLEET FLOWN BY A NEURAL NET · EVERY PATH LEFT IN THE SKY",
+  speed: 1.4, N: [250, 500, 550, 850], size: 8,
+  setup(K) { ring = new Float32Array(K.N * TR * 3); data = new Float32Array(K.N * (TR - 1) * 14); },
+  update(K, dt) {
+    const f = K.fleet, P = [0, 0, 0];
+    if ((acc += dt) < EVERY && K.clock > EVERY) return;
+    acc = 0; head = (head + 1) % TR;
+    f.drones.forEach((d, i) => {
+      f.toWorld(d, P);
+      if (K.clock <= EVERY) for (let j = 0; j < TR; j++) ring.set(P, (i * TR + j) * 3);
+      else ring.set(P, (i * TR + head) * 3);
+    });
+  },
+  // Segments from newest to oldest, fading out. A jump (a drone relaunched from the ground) leaves no streak.
+  render(K, ctx) {
+    const f = K.fleet;
+    f.drones.forEach((d, i) => {
+      for (let j = 0; j < TR - 1; j++) {
+        const a = (i * TR + (head - j + TR) % TR) * 3, b = (i * TR + (head - j - 1 + TR) % TR) * 3, o = (i * (TR - 1) + j) * 14;
+        const jump = Math.abs(ring[a] - ring[b]) + Math.abs(ring[a + 1] - ring[b + 1]) + Math.abs(ring[a + 2] - ring[b + 2]) > 900;
+        const k0 = jump ? 0 : (1 - j / (TR - 1)) * .65, k1 = jump ? 0 : (1 - (j + 1) / (TR - 1)) * .65;
+        data[o] = ring[a]; data[o + 1] = ring[a + 1]; data[o + 2] = ring[a + 2]; data[o + 3] = d.r; data[o + 4] = d.g; data[o + 5] = d.b; data[o + 6] = k0;
+        data[o + 7] = ring[b]; data[o + 8] = ring[b + 1]; data[o + 9] = ring[b + 2]; data[o + 10] = d.r; data[o + 11] = d.g; data[o + 12] = d.b; data[o + 13] = k1;
+      }
+    });
+    f.extra(ctx, data, true);
+  },
+});
+}
+</script>
+</body>
+</html>

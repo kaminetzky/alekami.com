@@ -1,0 +1,228 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#060818">
+<style>
+*{box-sizing:border-box}
+html,body{height:100%;margin:0;background:#060818;color:#eef3ff;overflow:hidden;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+body>canvas{position:fixed;inset:0;width:100%;height:100%;display:block}
+.ui{position:fixed;inset:0;pointer-events:none;display:flex;flex-direction:column;justify-content:space-between;padding:max(18px,env(safe-area-inset-top)) clamp(16px,3vw,40px) max(16px,env(safe-area-inset-bottom))}
+.top{display:flex;justify-content:space-between;gap:20px;flex-wrap:wrap}
+h1{margin:0;font:800 clamp(28px,5vw,76px)/.95 "Helvetica Neue",Helvetica,Arial,sans-serif;letter-spacing:-.03em}
+.role{margin:9px 0 0;font-size:clamp(11px,1.1vw,14px);letter-spacing:.08em;color:#a9bdf0}
+.board{font-size:clamp(11px,1.05vw,14px);min-width:230px;background:#060818b0;padding:10px 12px;border:1px solid #ffffff22;height:max-content}
+.board div{display:flex;justify-content:space-between;gap:16px;line-height:1.65}
+.board b{color:#ffd166;font-weight:700}
+#caption{color:#7dffb0;margin:6px 0 0;font-size:inherit;min-height:2.6em;max-width:280px}
+#chart{display:block;width:100%;height:34px;margin-top:4px}
+.foot{display:flex;justify-content:flex-end;align-items:flex-end;gap:12px}
+.note{margin:0 auto 0 0;font-size:11px;color:#8ea0cc;align-self:flex-end}
+.links{display:flex;gap:10px;pointer-events:auto}
+a{color:#060818;background:#ffd166;padding:11px 18px;text-decoration:none;font-weight:700;font-size:13px}
+a+a{background:#eef3ff}
+a:hover,a:focus-visible{background:#7dffb0}
+@media (max-width:700px){.board{min-width:0;width:100%}#caption{max-width:none;min-height:1.4em}.foot{flex-wrap:wrap}.note{width:100%;margin:0}}
+</style>
+</head>
+<body>
+<canvas id="bg" aria-hidden="true"></canvas>
+<canvas id="trail" aria-hidden="true"></canvas>
+<canvas id="fg" aria-hidden="true"></canvas>
+<div class="ui">
+  <div class="top">
+    <div><h1 id="name"></h1><p class="role" id="role"></p></div>
+    <div class="board">
+      <div><span>GENERATION</span><b id="gen">0</b></div>
+      <div><span>LANDED THIS WAVE</span><b id="rate">0/0</b></div>
+      <div><span>SOFTEST</span><b id="sink">--</b></div>
+      <canvas id="chart"></canvas>
+      <p id="caption">Random brains, no flying lessons.</p>
+    </div>
+  </div>
+  <div class="foot">
+    <p class="note">Simplified flight physics, real training on your device. Vertical scale exaggerated.</p>
+    <div class="links"><a id="gh" rel="me noopener">GitHub</a><a id="li" rel="me noopener">LinkedIn</a></div>
+  </div>
+</div>
+<script src="../config.js"></script>
+<script src="autoland-sim.js"></script>
+<script>
+{
+const S = SITE, A = AUTOLAND, $ = id => document.getElementById(id);
+$("name").innerHTML = S.first + "<br>" + S.last; $("role").textContent = "PILOT · ML · SOFTWARE · ELECTRICAL";
+$("gh").href = S.github; $("li").href = S.linkedin;
+const bg = $("bg"), trail = $("trail"), fg = $("fg"), tx = trail.getContext("2d"), fx = fg.getContext("2d");
+const still = matchMedia("(prefers-reduced-motion: reduce)").matches;
+const X0 = -2750, X1 = 1250, TOPH = 175;
+let W, H, dpr, groundY, sy;
+const X = x => (x - X0) / (X1 - X0) * W, Y = h => groundY - h * sy;
+
+function layout() {
+  W = innerWidth; H = innerHeight; dpr = Math.min(devicePixelRatio || 1, S.tier() === 0 ? 1 : 1.5);
+  for (const c of [bg, trail, fg]) { c.width = W * dpr; c.height = H * dpr; }
+  groundY = H * (W < 700 ? .84 : .83); sy = (groundY - H * (W < 700 ? .34 : .22)) / TOPH;
+  const g = bg.getContext("2d"); g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  const sky = g.createLinearGradient(0, 0, 0, groundY);
+  sky.addColorStop(0, "#060818"); sky.addColorStop(.62, "#1b1440"); sky.addColorStop(.88, "#6b2c5c"); sky.addColorStop(1, "#e0814f");
+  g.fillStyle = sky; g.fillRect(0, 0, W, groundY);
+  let seed = 11; const rnd = () => (seed = seed * 16807 % 2147483647) / 2147483647;
+  for (let i = 0; i < 170; i++) { g.fillStyle = "rgba(255,255,255," + (.15 + rnd() * .7) + ")"; g.fillRect(rnd() * W, rnd() * groundY * .7, 1.2, 1.2); }
+  // Distant ridgeline.
+  g.fillStyle = "#231a3e"; g.beginPath(); g.moveTo(0, groundY);
+  for (let x = 0; x <= W + 16; x += 16) g.lineTo(x, groundY - 16 - 24 * Math.abs(Math.sin(x * .007)) - 12 * Math.abs(Math.sin(x * .023 + 1)));
+  g.lineTo(W, groundY); g.fill();
+  g.fillStyle = "#0a0b18"; g.fillRect(0, groundY, W, H - groundY);
+  // Runway and markings.
+  const rx = X(0), rw = X(1000) - rx;
+  g.fillStyle = "#2b2e3d"; g.fillRect(rx, groundY - 2, rw, 6);
+  g.fillStyle = "#fff"; g.fillRect(rx, groundY - 2, 3, 6);
+  g.fillStyle = "#ffffffcc"; for (let d = 60; d < 1000; d += 90) g.fillRect(X(d), groundY, Math.max(2, (X(30) - X(0))), 1.4);
+  g.fillStyle = "#7dffb044"; g.fillRect(X(150), groundY - 2, X(550) - X(150), 6);
+  g.fillStyle = "#c6d4ff"; g.font = "11px ui-monospace,Menlo,monospace"; g.textAlign = "center";
+  g.fillText("TOUCHDOWN ZONE", X(350), groundY + 19);
+  // The glide path.
+  g.strokeStyle = "#ffffff2e"; g.setLineDash([5, 8]); g.lineWidth = 1;
+  g.beginPath(); g.moveTo(X(A.AIM_X), Y(0)); const sx = -2700; g.lineTo(X(sx), Y((A.AIM_X - sx) * Math.tan(A.GS))); g.stroke(); g.setLineDash([]);
+  tx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+
+// Training happens in a worker that stops itself when finished. The page replays its generations.
+const snapshots = []; let trainingDone = false, worker = null;
+const rates = [];
+if (window.Worker) {
+  worker = new Worker("autoland-sim.js");
+  worker.onmessage = ({ data }) => {
+    snapshots.push(data);
+    rates[data.gen - 1] = data.rate;
+    if (data.done) { trainingDone = true; worker.terminate(); }
+  };
+}
+// Replay more of the early generations, where the visible learning happens.
+const SHOW = [1, 2, 3, 5, 8, 12, 20, 30];
+let showIndex = 0, wave = [], waveGen = 0, stepClock = 0, landed = 0, softest = null, sparks = [], waveEnd = 0, rand = Math.random;
+function nextWave() {
+  let snap = null;
+  if (showIndex < SHOW.length) {
+    const want = SHOW[showIndex];
+    if (snapshots.length >= want) { snap = snapshots[want - 1]; showIndex++; }
+    else if (trainingDone) { showIndex = SHOW.length; }
+    else return false;
+  }
+  if (!snap) snap = snapshots[snapshots.length - 1];
+  if (!snap) return false;
+  waveGen = snap.gen; landed = 0;
+  const mob = W < 700 ? 14 : 24;
+  wave = snap.pilots.slice(0, mob).map((g, i) => ({ g, s: A.start(rand), delay: i * .7, outcome: null }));
+  $("gen").textContent = waveGen - 1;
+  drawChart();
+  return true;
+}
+function caption(frac) {
+  $("caption").textContent = frac < .1 ? "Random brains. Mostly flying into the ground." : frac < .45 ? "Finding the glide path." : frac < .85 ? "Learning to flare." : "Stabilized approach. Gentle touchdowns.";
+}
+function drawChart() {
+  const c = $("chart"), r = c.getBoundingClientRect();
+  if (!r.width) return;
+  const d = Math.min(devicePixelRatio || 1, 2);
+  if (c.width !== (r.width * d | 0)) { c.width = r.width * d; c.height = r.height * d; }
+  const g = c.getContext("2d"); g.setTransform(d, 0, 0, d, 0, 0); g.clearRect(0, 0, r.width, r.height);
+  const n = Math.min(rates.length, waveGen || 1);
+  g.strokeStyle = "#7dffb0"; g.lineWidth = 1.5; g.beginPath();
+  for (let i = 0; i < n; i++) { const x = i / Math.max(1, Math.max(40, n) - 1) * r.width, y = r.height - 2 - (rates[i] || 0) * (r.height - 4); i ? g.lineTo(x, y) : g.moveTo(x, y); }
+  g.stroke();
+}
+const plane = new Path2D("M16 0L9-3-8-2.5-16-9-19-9-17-1-17 1-8 3 10 3Z M-3-3.4H6V-2.4H-3Z");
+const OUT = { landed: "#7dffb0", hard: "#ffb14d", short: "#ff5d6c", long: "#ffb14d", stall: "#ff5d6c", missed: "#8ea0cc" };
+function burst(x, y, color) {
+  for (let i = 0; i < 9; i++) sparks.push({ x, y, vx: (Math.random() - .5) * 90, vy: -Math.random() * 70, life: .5 + Math.random() * .4, color });
+  if (sparks.length > 120) sparks.splice(0, sparks.length - 120);
+}
+function simulate(dt) {
+  let live = 0;
+  stepClock += dt * 75;
+  const steps = stepClock | 0; stepClock -= steps;
+  const now = performance.now();
+  for (const p of wave) {
+    if (p.delay > 0) { p.delay -= dt * 2.6; live++; continue; }
+    if (p.s.done) continue;
+    live++;
+    for (let k = 0; k < steps && !p.s.done; k++) {
+      const px = p.s.x, ph = p.s.h;
+      A.step(p.g, p.s);
+      tx.strokeStyle = waveTrail; tx.lineWidth = 1; tx.beginPath(); tx.moveTo(X(px), Y(ph)); tx.lineTo(X(p.s.x), Y(p.s.h)); tx.stroke();
+    }
+    if (p.s.done) {
+      p.outcome = p.s.result;
+      if (p.outcome === "landed") {
+        landed++;
+        if (softest === null || p.s.sink < softest) { softest = p.s.sink; $("sink").textContent = Math.round(p.s.sink * 197) + " fpm"; }
+      } else if (p.s.h <= 0 && p.outcome !== "long") burst(X(p.s.x), Y(0), OUT[p.outcome]);
+      p.at = now;
+    }
+  }
+  const total = wave.length, finished = wave.filter(p => p.s.done).length;
+  $("rate").textContent = landed + "/" + total;
+  if (finished) caption(landed / finished);
+  return live;
+}
+const waveTrail = "rgba(160,200,255,.2)";
+function drawPlanes(dt) {
+  fx.setTransform(dpr, 0, 0, dpr, 0, 0); fx.clearRect(0, 0, W, H);
+  const scale = W < 700 ? .75 : 1, now = performance.now();
+  // PAPI: four lights beside the aim point, read from the lead aircraft's real angle.
+  const lead = wave.find(p => !p.s.done && p.delay <= 0);
+  const ang = lead ? Math.atan2(lead.s.h, Math.max(1, A.AIM_X - lead.s.x)) * 180 / Math.PI : 3;
+  [3.5, 3.17, 2.83, 2.5].forEach((t, i) => {
+    fx.fillStyle = ang > t ? "#fff" : "#ff3b4e";
+    fx.beginPath(); fx.arc(X(A.AIM_X) + (i - 1.5) * 8, groundY + 7, 2.6, 0, 6.3); fx.fill();
+  });
+  // Approach lights.
+  const seq = (now / 110 | 0) % 7;
+  for (let i = 0; i < 7; i++) { fx.fillStyle = i === seq ? "#fff" : "#ffffff44"; fx.fillRect(X(-40 - i * 55) - 1, groundY - 1, 2.4, 2.4); }
+  for (const p of wave) {
+    if (p.delay > 0) continue;
+    const s = p.s;
+    if (s.done && now - p.at > 1800) continue;
+    const a = s.done ? Math.max(.1, 1 - (now - p.at) / 1800) : 1;
+    fx.save(); fx.globalAlpha = a;
+    fx.translate(X(s.x), Y(s.h)); fx.rotate(-s.th); fx.scale(scale, scale);
+    fx.fillStyle = s.done ? OUT[p.outcome] : "#eef3ff";
+    fx.fill(plane);
+    fx.restore();
+    if (s.done && p.outcome === "landed") {
+      fx.fillStyle = "#7dffb0"; fx.font = "bold 11px ui-monospace,Menlo,monospace"; fx.textAlign = "center"; fx.globalAlpha = a;
+      fx.fillText(Math.round(s.sink * 197) + " fpm", X(s.x), groundY - 15); fx.globalAlpha = 1;
+    }
+  }
+  for (const k of sparks) {
+    k.life -= dt; k.x += k.vx * dt; k.y += k.vy * dt; k.vy += 180 * dt;
+    if (k.life > 0) { fx.fillStyle = k.color; fx.globalAlpha = Math.min(1, k.life * 2); fx.fillRect(k.x, k.y, 2.2, 2.2); fx.globalAlpha = 1; }
+  }
+  sparks = sparks.filter(k => k.life > 0);
+}
+let last = 0, waitUntil = 0, idleWaves = 0;
+function frame(t) {
+  requestAnimationFrame(frame);
+  if (document.hidden) { last = t; return; }
+  const dt = Math.min(.05, (t - last) / 1000); last = t;
+  if (!wave.length) { if (nextWave()) clearTrails(); }
+  else {
+    const live = simulate(dt);
+    if (!live && !waitUntil) waitUntil = t + 1700;
+    if (waitUntil && t > waitUntil) { waitUntil = 0; if (nextWave()) clearTrails(); }
+  }
+  drawPlanes(dt);
+}
+function clearTrails() { tx.clearRect(0, 0, W, H); }
+let rt;
+addEventListener("resize", () => { clearTimeout(rt); rt = setTimeout(layout, 120); });
+S.ready(() => {
+  layout();
+  if (!still) requestAnimationFrame(frame);
+});
+}
+</script>
+</body>
+</html>

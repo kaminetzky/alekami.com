@@ -1,0 +1,192 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#050818">
+<style>
+html,body{height:100%;margin:0;background:#050818;color:#fff;overflow:hidden;font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif}
+canvas{position:fixed;inset:0;width:100%;height:100%;display:block}
+.ui{position:fixed;left:0;right:0;bottom:max(18px,env(safe-area-inset-bottom));display:flex;flex-direction:column;align-items:center;gap:10px;pointer-events:none;text-align:center;padding:0 16px}
+h1{margin:0;font-size:12px;font-weight:600;letter-spacing:.24em;text-transform:uppercase;color:#c9d2ff}
+.links{display:flex;gap:10px;pointer-events:auto}
+a{color:#fff;border:1px solid #ffffff55;background:#ffffff12;backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);padding:10px 20px;border-radius:999px;text-decoration:none;font-weight:600;font-size:14px}
+a:hover,a:focus-visible{background:#fff;color:#050818}
+</style>
+</head>
+<body>
+<canvas id="c" role="img" aria-label="A night drone show over a lake: the drones form this person's name in 3D, then a plane and a quadcopter, reflected in the water"></canvas>
+<div class="ui"><h1 id="role"></h1><div class="links"><a id="gh" rel="me noopener">GitHub</a><a id="li" rel="me noopener">LinkedIn</a></div></div>
+<script src="../config.js"></script>
+<script src="gl3d.js"></script>
+<script>
+{
+const S = SITE, G3 = GL3D, $ = id => document.getElementById(id);
+$("role").textContent = S.role + " · Pilot"; $("gh").href = S.github; $("li").href = S.linkedin;
+const c = $("c"), gl = c.getContext("webgl", { antialias: true, alpha: false });
+if (!gl) { S.noWebGL(); throw new Error("WebGL unavailable"); }
+const still = matchMedia("(prefers-reduced-motion: reduce)").matches, small = Math.min(innerWidth, innerHeight) < 600;
+const tier = S.tier(gl), N = [400, 800, small ? 900 : 1500][tier];
+let level = tier;
+const govern = S.governor(level, l => { level = l; size(); });
+
+const VS = "attribute vec3 aP; attribute vec4 aC; uniform mat4 uM; uniform float uPx, uRip, uT; varying vec4 vC; void main(){ vec3 p=aP; p.x+=uRip*sin(uT*2.1+p.y*.05)*min(1.,-p.y*.004); vec4 q=uM*vec4(p,1.); gl_Position=q; gl_PointSize=clamp(uPx/q.w,1.5,24.); vC=aC; }";
+const dotP = G3.program(gl, VS, "precision mediump float; varying vec4 vC; void main(){ vec2 p=gl_PointCoord-.5; float d=dot(p,p)*4.; float a=min(1.,exp(-d*4.)*.7+exp(-d*28.))*vC.a; gl_FragColor=vec4(vC.rgb*a,a); }");
+const flatP = G3.program(gl, VS, "precision mediump float; varying vec4 vC; void main(){ gl_FragColor=vec4(vC.rgb*vC.a,vC.a); }");
+const skyP = G3.program(gl, "attribute vec2 a; varying float y; void main(){ y=a.y; gl_Position=vec4(a,.999,1.); }",
+  "precision mediump float; varying float y; uniform float uH; void main(){ float h=y-uH; vec3 c=mix(vec3(.16,.07,.22),vec3(.02,.03,.1),smoothstep(0.,.5,h)); c=mix(c,vec3(.01,.012,.04),smoothstep(.5,1.4,h)); c+=vec3(.35,.12,.25)*exp(-max(h,0.)*14.)*.6; gl_FragColor=vec4(c,1.); }");
+const buf = gl.createBuffer(), skyBuf = gl.createBuffer();
+gl.bindBuffer(gl.ARRAY_BUFFER, skyBuf); gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+
+// ---------- Formations, in metres around the show centre ----------
+const CY = 330;
+const hue = (h, s, l) => { const k = n => (n + h * 12) % 12, a = s * Math.min(l, 1 - l), f = n => l - a * Math.max(-1, Math.min(k(n) - 3, 9 - k(n), 1)); return [f(0), f(8), f(4)]; };
+function nameShape(narrow) {
+  const m = document.createElement("canvas"), lines = S.lines(narrow), g = m.getContext("2d", { willReadFrequently: true });
+  m.width = 800; m.height = narrow ? 420 : 160;
+  g.font = '900 100px "Arial Black","Helvetica Neue",Arial,sans-serif';
+  const widest = Math.max(...lines.map(l => g.measureText(l).width)), sz = Math.min(100 * 780 / widest, m.height * .9 / lines.length);
+  g.font = g.font.replace("100px", sz + "px"); g.fillStyle = "#fff"; g.textAlign = "center"; g.textBaseline = "middle";
+  lines.forEach((l, i) => g.fillText(l, 400, m.height / 2 + (i - (lines.length - 1) / 2) * sz * 1.05));
+  const d = g.getImageData(0, 0, 800, m.height).data, half = Math.ceil(N / 2);
+  let list = [];
+  for (let st = 12; st >= 2; st -= .25) { list = []; for (let y = st / 2; y < m.height; y += st) for (let a = st / 2; a < 800; a += st) if (d[((y | 0) * 800 + (a | 0)) * 4 + 3] > 120) list.push([a, y]); if (list.length >= half) break; }
+  const scale = (narrow ? 820 : 1250) / 800;
+  return Array.from({ length: N }, (_, i) => {
+    const p = list[(i >> 1) % list.length], X = (p[0] - 400) * scale, u = p[0] / 800;
+    return { p: [X, CY - (p[1] - m.height / 2) * scale, i % 2 ? 26 : -26], c: hue(.52 + u * .38, 1, .62) };
+  });
+}
+// A light aircraft and a quadcopter, sampled over their surfaces.
+const rnd = (a, b) => a + Math.random() * (b - a);
+function planeShape() {
+  const parts = [[3, () => { const u = rnd(-1, 1), a = rnd(0, 6.28), r = 46 * (1 - Math.pow(Math.abs(u), 3) * .8) * (u < 0 ? 1 - (-u) * .45 : 1); return [u * 430, Math.sin(a) * r, Math.cos(a) * r]; }],
+    [3, () => [rnd(-70, 60), 32, rnd(-520, 520)]], [1, () => [rnd(-420, -350), 8, rnd(-170, 170)]], [.7, () => { const h = rnd(0, 1); return [rnd(-430, -350) + h * 50, 10 + h * 170, 0]; }]];
+  const total = parts.reduce((s, p) => s + p[0], 0), yaw = .55, pitch = -.18;
+  return Array.from({ length: N }, () => {
+    let r = Math.random() * total, part = parts[0];
+    for (const p of parts) { if (r < p[0]) { part = p; break; } r -= p[0]; }
+    let [px, py, pz] = part[1]();
+    [py, px] = [py * Math.cos(pitch) + px * Math.sin(pitch), px * Math.cos(pitch) - py * Math.sin(pitch)];
+    [px, pz] = [px * Math.cos(yaw) - pz * Math.sin(yaw), px * Math.sin(yaw) + pz * Math.cos(yaw)];
+    const tip = Math.abs(pz) > 380;
+    return { p: [px * .95, CY + py, pz * .95], c: tip ? (pz > 0 ? [.3, 1, .45] : [1, .25, .3]) : px > 330 ? [1, .7, .3] : [.9, .95, 1] };
+  });
+}
+function droneShape() {
+  const arms = [[1, 1], [1, -1], [-1, 1], [-1, -1]], tilt = .6;
+  return Array.from({ length: N }, (_, i) => {
+    let px, py, pz, col = [.35, 1, .7];
+    const k = i % 10;
+    if (k < 6) { const arm = arms[i % 4], a = rnd(0, 6.28), cx = arm[0] * 300, cz = arm[1] * 300; px = cx + Math.cos(a) * 170; pz = cz + Math.sin(a) * 170; py = 30; col = [.4, .9, 1]; }
+    else if (k < 9) { const arm = arms[i % 4], u = rnd(.25, 1); px = arm[0] * 300 * u; pz = arm[1] * 300 * u; py = 0; }
+    else { px = rnd(-90, 90); pz = rnd(-90, 90); py = rnd(-30, 30); col = [1, .85, .4]; }
+    return { p: [px, CY + py * Math.cos(tilt) + pz * Math.sin(tilt), pz * Math.cos(tilt) - py * Math.sin(tilt)], c: col };
+  });
+}
+let shapes = [], shapeIndex = 0, shapeAt = 0, drones = [];
+const HOLD = [11, 7, 7];
+function build() {
+  const narrow = innerWidth / innerHeight < 1;
+  shapes = [nameShape(narrow), planeShape(), droneShape()];
+}
+// Each drone gets a slot; slots are handed out left to right so paths rarely cross, and each drone leaves on a slight delay.
+function assign(t) {
+  const sh = shapes[shapeIndex], order = drones.map((_, i) => i).sort((a, b) => drones[a].p[0] - drones[b].p[0]), slots = sh.map((_, i) => i).sort((a, b) => sh[a].p[0] - sh[b].p[0]);
+  order.forEach((di, k) => { const d = drones[di], s = sh[slots[k]]; d.t = s.p; d.tc = s.c; d.go = t + k / N * 1.4 + Math.random() * .3; });
+}
+
+// City lights across the lake, built once.
+const city = [];
+for (let b = 0; b < 70; b++) {
+  const bx = rnd(-6000, 6000), bw = rnd(80, 260), bh = rnd(120, 900) * (1 - Math.abs(bx) / 9000), bz = rnd(-5200, -4200), warm = Math.random() < .65;
+  for (let wx = 0; wx < bw; wx += 26) for (let wy = 20; wy < bh; wy += 30) if (Math.random() < .3) city.push([bx + wx, wy, bz, warm ? [1, .72, .38] : [.65, .8, 1]]);
+}
+const stars = Array.from({ length: 450 }, () => { const a = rnd(-1.4, 1.4), e = Math.asin(rnd(.05, 1)), r = 9000; return [Math.sin(a) * Math.cos(e) * r, Math.sin(e) * r, -Math.cos(a) * Math.cos(e) * r, rnd(.2, .9)]; });
+
+let W, H, aspect = 1;
+function size() {
+  W = innerWidth; H = innerHeight; aspect = W / H;
+  const dpr = Math.min(devicePixelRatio || 1, small ? 1.5 : 2) * [.6, .85, 1][level];
+  c.width = W * dpr; c.height = H * dpr; gl.viewport(0, 0, c.width, c.height);
+}
+
+const FOV = .8, data = new Float32Array(Math.max(N, city.length, stars.length) * 2 * 7 + 64);
+function frameAt(t) {
+  // Camera on the shore, drifting along it so the 3D shapes turn.
+  const narrow = aspect < 1, D = narrow ? 2500 : 1800, a = .3 * Math.sin(t * .11);
+  const eye = [Math.sin(a) * D, 36 + 18 * Math.sin(t * .07), Math.cos(a) * D];
+  // Aim between the show and its reflection, so both are framed.
+  const P = G3.perspective(FOV, aspect, 10, 20000), V = G3.lookAt(eye, [0, CY * .3, 0]), M = G3.mul(P, V);
+  const px = 9 * (c.height / 2) / Math.tan(FOV / 2);
+  const fw = G3.norm(G3.sub([0, CY * .3, 0], eye)), far = [eye[0] + fw[0] * 1e4, 0, eye[2] + fw[2] * 1e4], hp = G3.mul(P, V);
+  const hy = (hp[1] * far[0] + hp[5] * far[1] + hp[9] * far[2] + hp[13]) / (hp[3] * far[0] + hp[7] * far[1] + hp[11] * far[2] + hp[15]);
+
+  gl.disable(gl.DEPTH_TEST); gl.disable(gl.BLEND);
+  gl.useProgram(skyP); gl.bindBuffer(gl.ARRAY_BUFFER, skyBuf);
+  const la = gl.getAttribLocation(skyP, "a"); gl.enableVertexAttribArray(la); gl.vertexAttribPointer(la, 2, gl.FLOAT, false, 0, 0);
+  gl.uniform1f(gl.getUniformLocation(skyP, "uH"), hy); gl.drawArrays(gl.TRIANGLES, 0, 3); gl.disableVertexAttribArray(la);
+  const L = [["aP", 3], ["aC", 4]], U = { uM: M, uPx: px, uRip: 0, uT: t };
+  // The lake: dark water from the shore to the far bank.
+  const water = new Float32Array([-9000, 0, 2500, .015, .02, .05, 1, 9000, 0, 2500, .015, .02, .05, 1, -9000, 0, -5000, .05, .04, .1, 1, 9000, 0, 2500, .015, .02, .05, 1, 9000, 0, -5000, .05, .04, .1, 1, -9000, 0, -5000, .05, .04, .1, 1]);
+  G3.draw(gl, flatP, buf, water, L, gl.TRIANGLES, 6, U);
+  gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE);
+  let n = 0;
+  for (const s of stars) { data.set([s[0], s[1], s[2], .8, .85, 1, s[3] * .6], n * 7); n++; }
+  G3.draw(gl, dotP, buf, data.subarray(0, n * 7), L, gl.POINTS, n, Object.assign({}, U, { uPx: px * .25 }));
+  // City windows and their long reflections.
+  n = 0;
+  for (const w of city) { data.set([w[0], w[1], w[2], ...w[3], .55], n * 7); n++; }
+  G3.draw(gl, dotP, buf, data.subarray(0, n * 7), L, gl.POINTS, n, Object.assign({}, U, { uPx: px * .9 }));
+  n = 0;
+  for (const w of city) { if (w[1] > 400) continue; data.set([w[0], -w[1], w[2], ...w[3], .12, w[0], -w[1] - 90, w[2], ...w[3], 0], n * 14); n++; }
+  G3.draw(gl, flatP, buf, data.subarray(0, n * 14), L, gl.LINES, n * 2, U);
+  // Drones mirrored in the water as rippling streaks, then the drones themselves.
+  n = 0;
+  for (const d of drones) { data.set([d.p[0], -d.p[1], d.p[2], ...d.c, .28, d.p[0], -d.p[1] - 26 - d.p[1] * .06, d.p[2], ...d.c, 0], n * 14); n++; }
+  G3.draw(gl, flatP, buf, data.subarray(0, n * 14), L, gl.LINES, n * 2, Object.assign({}, U, { uRip: 7 }));
+  n = 0;
+  for (const d of drones) { data.set([d.p[0], -d.p[1], d.p[2], ...d.c, .25], n * 7); n++; }
+  G3.draw(gl, dotP, buf, data.subarray(0, n * 7), L, gl.POINTS, n, Object.assign({}, U, { uRip: 7 }));
+  n = 0;
+  for (const d of drones) { data.set([...d.p, ...d.c, 1], n * 7); n++; }
+  G3.draw(gl, dotP, buf, data.subarray(0, n * 7), L, gl.POINTS, n, U);
+}
+function step(dt, t) {
+  if (t - shapeAt > HOLD[shapeIndex]) { shapeIndex = (shapeIndex + 1) % shapes.length; shapeAt = t; assign(t); }
+  for (const d of drones) {
+    if (t < d.go) continue;
+    // A damped spring toward the slot, with a speed limit, like a real show drone.
+    for (let k = 0; k < 3; k++) {
+      d.v[k] += (2.6 * (d.t[k] - d.p[k]) - 2.9 * d.v[k]) * dt;
+    }
+    const sp = Math.hypot(d.v[0], d.v[1], d.v[2]); if (sp > 420) for (let k = 0; k < 3; k++) d.v[k] *= 420 / sp;
+    for (let k = 0; k < 3; k++) { d.p[k] += d.v[k] * dt; d.c[k] += (d.tc[k] - d.c[k]) * Math.min(1, dt * 2); }
+  }
+}
+let last = 0, clock = 0;
+function frame(now) {
+  requestAnimationFrame(frame);
+  if (document.hidden) { last = now; return; }
+  govern(now);
+  const dt = Math.min(.05, (now - last) / 1000); last = now; clock += dt;
+  step(dt, clock); frameAt(clock);
+}
+let rt, bw = innerWidth;
+addEventListener("resize", () => {
+  size(); if (still) frameAt(0);
+  if (innerWidth === bw) return; bw = innerWidth; clearTimeout(rt);
+  rt = setTimeout(() => { build(); assign(clock); if (still) { drones.forEach(d => d.p = d.t.slice()); frameAt(0); } }, 150);
+});
+S.ready(() => {
+  bw = innerWidth; size(); build();
+  // The fleet starts on a launch barge on the water, then rises into the first formation.
+  drones = Array.from({ length: N }, (_, i) => ({ p: [((i % 50) - 25) * 14, 4, 300 + Math.floor(i / 50) * 14], v: [0, 0, 0], c: [.4, .5, .7], t: [0, 0, 0], tc: [1, 1, 1], go: 0 }));
+  assign(.5);
+  if (still) { drones.forEach(d => { d.p = d.t.slice(); d.c = d.tc.slice(); }); frameAt(0); }
+  else requestAnimationFrame(frame);
+});
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,8 @@
+# Built by build.sh
+site/
+# Wrangler's local cache (holds the Cloudflare account ID)
+.wrangler/
+# Editor and tool settings
+.claude/
+.DS_Store
+node_modules/

@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#fde0d6">
+<style>
+html,body{height:100%;margin:0;background:#fde0d6;color:#4a3f6b;overflow:hidden;font-family:ui-rounded,"SF Pro Rounded",ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;touch-action:none;user-select:none;-webkit-user-select:none}
+canvas{position:fixed;inset:0;width:100%;height:100%;display:block}
+#hud{cursor:grab}
+#hud:active{cursor:grabbing}
+.panel{position:fixed;left:50%;bottom:max(16px,env(safe-area-inset-bottom));transform:translateX(-50%);display:flex;flex-direction:column;align-items:center;gap:10px;width:min(100% - 24px,640px);pointer-events:none;text-align:center}
+.role{margin:0;font-size:clamp(11px,1.1vw,14px);font-weight:600;letter-spacing:.14em;color:#4a3f6b;text-transform:uppercase}
+.links{display:flex;gap:10px;pointer-events:auto}
+a{color:#fff;background:#ff5a7a;padding:11px 22px;border-radius:999px;text-decoration:none;font-weight:700;font-size:15px;box-shadow:0 6px 18px #ff5a7a55}
+a+a{background:#6c5ce7;box-shadow:0 6px 18px #6c5ce755}
+a:hover,a:focus-visible{filter:brightness(1.1)}
+</style>
+</head>
+<body>
+<canvas id="c" aria-hidden="true"></canvas>
+<canvas id="hud" aria-label="A sunny pastel landscape seen from a plane. Drones paint this person's name in the sky ahead. Drag to fly."></canvas>
+<div class="panel"><p class="role" id="role"></p><div class="links"><a id="gh" rel="me noopener">GitHub</a><a id="li" rel="me noopener">LinkedIn</a></div></div>
+<script src="../config.js"></script>
+<script src="shapes.js"></script>
+<script src="flight.js"></script>
+<script src="drone-sim.js"></script>
+<script src="brain.js"></script>
+<script src="fleet.js"></script>
+<script>
+{
+const S = SITE, FL = FLIGHT, $ = id => document.getElementById(id);
+$("role").textContent = S.full + " · " + S.role; $("gh").href = S.github; $("li").href = S.linkedin;
+const c = $("c"), gl = c.getContext("webgl", { antialias: true, alpha: false, powerPreference: "high-performance" });
+if (!gl) { S.noWebGL(); throw new Error("WebGL unavailable"); }
+const still = matchMedia("(prefers-reduced-motion: reduce)").matches;
+const RES = [.55, .8, 1], tier = S.tier(gl), small = Math.min(innerWidth, innerHeight) < 600;
+let level = tier;
+const govern = S.governor(level, l => { level = l; size(); });
+const world = FL.scene(gl, [84, 120, small ? 110 : 170][tier], "pastel");
+const F = FL.aircraft(), fleet = FLEET.create(gl, world, [300, 700, small ? 900 : 1300][tier]), O = fleet.O;
+const hud = $("hud"), h = hud.getContext("2d"), st = FL.stick(hud, F);
+// Daylight: solid paint-like dots, flown by the controller trained offline, so they're in place from the first second.
+fleet.blend = "normal"; fleet.pretrained();
+const PAINT = [[.95, .3, .45], [.42, .3, .85], [.12, .55, .62], [.98, .52, .2]];
+let pass = 0;
+
+let W, H, aspect = 1;
+function size() {
+  W = innerWidth; H = innerHeight; aspect = W / H;
+  const dpr = Math.min(devicePixelRatio || 1, small ? 1.5 : 1.75) * RES[level];
+  c.width = W * dpr; c.height = H * dpr; gl.viewport(0, 0, c.width, c.height);
+  hud.width = W * Math.min(devicePixelRatio || 1, 2); hud.height = H * Math.min(devicePixelRatio || 1, 2);
+}
+let clock = 0;
+function simulate(dt) {
+  const aim = fleet.aim(F);
+  FL.fly(F, dt, st.hand ? st.want(dt) : FL.autopilot(F, dt, aim.psi, aim.alt));
+  if (fleet.flythrough(F, dt, clock, 3000, .9, st.hand)) fleet.shapes[0].hue = PAINT[++pass % PAINT.length];
+  fleet.step(dt, F, fleet.shape().hue);
+}
+function draw() {
+  const cam = FL.basis(F), R = world.render(F, cam, aspect);
+  fleet.render({ R, P: F, aspect, height: c.height, size: 11 });
+  FL.hud(hud, h, W, H, F, st.hand ? "HAND FLYING" : "AUTOPILOT · " + FL.FLY, st.hand ? "#ff5a7a" : "#4a3f6b", st, { ink: "#4a3f6bcc", accent: "#ff5a7a", box: "#fff4ee" });
+}
+let last = 0;
+function frame(t) {
+  requestAnimationFrame(frame);
+  if (document.hidden) { last = t; return; }
+  govern(t);
+  const dt = Math.min(.05, (t - last) / 1000); last = t; clock += dt;
+  simulate(dt); draw();
+}
+let rt, bw = innerWidth;
+addEventListener("resize", () => {
+  size(); if (still) draw();
+  if (innerWidth === bw) return;
+  bw = innerWidth; clearTimeout(rt);
+  rt = setTimeout(() => { fleet.build(innerWidth / innerHeight < 1, 1, true); fleet.shapes[0].hue = PAINT[pass % PAINT.length]; fleet.assign(fleet.shape()); }, 150);
+});
+S.ready(() => {
+  bw = innerWidth; size(); fleet.build(innerWidth / innerHeight < 1, 1, true); fleet.shapes[0].hue = PAINT[0];
+  fleet.anchorAhead(F, 3000, 0);
+  fleet.drones.forEach(d => { fleet.park(d); d.r = PAINT[0][0]; d.g = PAINT[0][1]; d.b = PAINT[0][2]; });
+  if (still) {
+    fleet.drones.forEach(d => { d.x = d.tx; d.y = d.ty; d.s = 0; });
+    F.x = O.x - O.ax * 1500; F.z = O.z - O.az * 1500; F.alt = O.y;
+    draw();
+  } else requestAnimationFrame(frame);
+});
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#07061a">
+<style>
+html,body{height:100%;margin:0;background:#07061a;color:#7dff9b;overflow:hidden;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;touch-action:none;user-select:none;-webkit-user-select:none}
+canvas{position:fixed;inset:0;width:100%;height:100%;display:block}
+#hud{cursor:grab}
+#hud:active{cursor:grabbing}
+.panel{position:fixed;left:50%;bottom:max(14px,env(safe-area-inset-bottom));transform:translateX(-50%);display:flex;flex-direction:column;align-items:center;gap:8px;width:min(100% - 24px,640px);pointer-events:none;text-align:center}
+h1{margin:0;font-size:clamp(20px,3vw,40px);font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:#d4ffe0;text-shadow:0 0 14px #2dff6e,0 1px 3px #000}
+.role{margin:0;font-size:clamp(10px,1.05vw,13px);letter-spacing:.12em;color:#ffcf6a;text-shadow:0 1px 3px #000}
+.radio{display:flex;gap:10px;pointer-events:auto;width:100%;justify-content:center}
+a{flex:0 1 230px;color:#ffcf6a;background:#070a0cdd;border:1px solid #7dff9b66;text-decoration:none;padding:9px 10px;font-size:clamp(11px,1.1vw,13px);font-weight:700;letter-spacing:.06em;white-space:nowrap}
+a:hover,a:focus-visible{background:#7dff9b;color:#04140a}
+</style>
+</head>
+<body>
+<canvas id="c" aria-hidden="true"></canvas>
+<canvas id="hud" aria-label="Flight display. Drag to hand fly the aircraft."></canvas>
+<div class="panel">
+  <h1 id="name"></h1>
+  <p class="role" id="role"></p>
+  <div class="radio">
+    <a id="gh" rel="me noopener">GITHUB</a>
+    <a id="li" rel="me noopener">LINKEDIN</a>
+  </div>
+</div>
+<script src="../config.js"></script>
+<script src="flight.js"></script>
+<script>
+{
+const S = SITE, FL = FLIGHT, $ = id => document.getElementById(id);
+$("name").textContent = S.full; $("role").textContent = "PILOT IN COMMAND · " + S.role.toUpperCase();
+$("gh").href = S.github; $("li").href = S.linkedin;
+const c = $("c"), gl = c.getContext("webgl", { antialias: true, alpha: false, powerPreference: "high-performance" });
+if (!gl) { S.noWebGL(); throw new Error("WebGL unavailable"); }
+const still = matchMedia("(prefers-reduced-motion: reduce)").matches;
+const RES = [.55, .8, 1];
+let level = S.tier(gl);
+const govern = S.governor(level, l => { level = l; size(); });
+const small = Math.min(innerWidth, innerHeight) < 600;
+const world = FL.scene(gl, [84, 120, small ? 110 : 170][S.tier(gl)]);
+const F = FL.aircraft(), terrain = FL.terrain;
+let wander = 0, wanderT = 0, psiTarget = 0;
+
+// Waypoints flown toward. They sit on ridgelines ahead of the aircraft.
+const WAYPOINTS = [{ label: "GITHUB", url: S.github }, { label: "LINKEDIN", url: S.linkedin }];
+function placeWaypoint(w, dist) {
+  const a = F.psi + (Math.random() - .5) * .7, x = F.x + Math.sin(a) * dist, z = F.z + Math.cos(a) * dist;
+  w.x = x; w.z = z; w.y = terrain(x, z) + 150;
+}
+
+const hud = $("hud"), h = hud.getContext("2d");
+let W, H, dpr, aspect = 1;
+function size() {
+  W = innerWidth; H = innerHeight; aspect = W / H;
+  dpr = Math.min(devicePixelRatio || 1, small ? 1.5 : 1.75) * RES[level];
+  c.width = W * dpr; c.height = H * dpr; gl.viewport(0, 0, c.width, c.height);
+  hud.width = W * Math.min(devicePixelRatio || 1, 2); hud.height = H * Math.min(devicePixelRatio || 1, 2);
+}
+
+// A drag flies the plane. A tap on a waypoint opens it.
+const st = FL.stick(hud, F);
+st.onRelease = () => { psiTarget = F.psi + Math.tan(F.phi) * .4; wanderT = 3; };
+st.onTap = e => { for (const w of WAYPOINTS) if (w.sx && Math.hypot(e.clientX - w.sx, e.clientY - w.sy) < 42) { window.open(w.url, "_blank", "noopener"); break; } };
+
+function fly(dt) {
+  let want;
+  if (st.hand) want = st.want(dt);
+  else {
+    wanderT -= dt;
+    if (wanderT <= 0) { wander = (Math.random() - .5) * 2.4; wanderT = 6 + Math.random() * 6; psiTarget = F.psi + wander; }
+    want = FL.autopilot(F, dt, psiTarget);
+  }
+  FL.fly(F, dt, want);
+}
+
+function drawWaypoints(cam) {
+  for (const w of WAYPOINTS) {
+    const p = FL.project(cam, F, w.x, w.y, w.z, W, H), dist = Math.hypot(w.x - F.x, w.z - F.z);
+    if (p.z < -20 || dist > 3400) { placeWaypoint(w, 1700 + Math.random() * 1300); continue; }
+    w.sx = w.sy = null;
+    if (p.z < 40) continue;
+    const sx = p.x, sy = p.y;
+    if (sx < 20 || sx > W - 20 || sy < 60 || sy > H - 20) continue;
+    w.sx = sx; w.sy = sy;
+    h.strokeStyle = "#ff77d0"; h.fillStyle = "#ff77d0"; h.lineWidth = 2;
+    h.beginPath(); h.moveTo(sx, sy - 11); h.lineTo(sx + 11, sy); h.lineTo(sx, sy + 11); h.lineTo(sx - 11, sy); h.closePath(); h.stroke();
+    h.font = "bold 12px ui-monospace,Menlo,monospace"; h.textAlign = "center"; h.textBaseline = "alphabetic";
+    h.fillText(w.label, sx, sy - 17);
+    h.font = "11px ui-monospace,Menlo,monospace";
+    h.fillText((dist / 1852).toFixed(1) + " NM", sx, sy + 26);
+  }
+}
+
+let last = 0;
+function frame(t) {
+  if (!still) requestAnimationFrame(frame);
+  if (document.hidden) { last = t; return; }
+  govern(t);
+  const dt = Math.min(.05, (t - last) / 1000); last = t;
+  if (!still) fly(dt);
+  const cam = FL.basis(F);
+  world.render(F, cam, aspect);
+  FL.hud(hud, h, W, H, F, st.hand ? "HAND FLYING" : "AUTOPILOT · DRAG TO TAKE CONTROL", st.hand ? FL.AMBER : FL.GREEN, st);
+  drawWaypoints(cam);
+}
+addEventListener("resize", size);
+S.ready(() => {
+  size();
+  WAYPOINTS.forEach((w, i) => placeWaypoint(w, 1400 + i * 900));
+  requestAnimationFrame(frame);
+});
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#07061a">
+<style>
+html,body{height:100%;margin:0;background:#07061a;color:#7dff9b;overflow:hidden;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;touch-action:none;user-select:none;-webkit-user-select:none}
+canvas{position:fixed;inset:0;width:100%;height:100%;display:block}
+#hud{cursor:grab}
+#hud:active{cursor:grabbing}
+.panel{position:fixed;left:50%;bottom:max(14px,env(safe-area-inset-bottom));transform:translateX(-50%);display:flex;flex-direction:column;align-items:center;gap:8px;width:min(100% - 24px,640px);pointer-events:none;text-align:center}
+h1{margin:0;font-size:clamp(16px,2.2vw,30px);font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:#d4ffe0;text-shadow:0 0 14px #2dff6e,0 1px 3px #000}
+.role{margin:0;font-size:clamp(10px,1.05vw,13px);letter-spacing:.12em;color:#ffcf6a;text-shadow:0 1px 3px #000;text-wrap:balance}
+.radio{display:flex;gap:10px;pointer-events:auto;width:100%;justify-content:center}
+a{flex:0 1 230px;color:#ffcf6a;background:#070a0cdd;border:1px solid #7dff9b66;text-decoration:none;padding:9px 10px;font-size:clamp(11px,1.1vw,13px);font-weight:700;letter-spacing:.06em;white-space:nowrap}
+a:hover,a:focus-visible{background:#7dff9b;color:#04140a}
+</style>
+</head>
+<body>
+<canvas id="c" aria-hidden="true"></canvas>
+<canvas id="hud" aria-label="Four training methods race live, each flying a quarter of a drone fleet that forms this person's name. Drag to hand fly."></canvas>
+<div class="panel">
+  <h1 id="name"></h1>
+  <p class="role" id="role"></p>
+  <div class="radio">
+    <a id="gh" rel="me noopener">GITHUB</a>
+    <a id="li" rel="me noopener">LINKEDIN</a>
+  </div>
+</div>
+<script src="../config.js"></script>
+<script src="shapes.js"></script>
+<script src="flight.js"></script>
+<script src="drone-sim.js"></script>
+<script src="brain.js"></script>
+<script src="fleet.js"></script>
+<script src="formation-kit.js"></script>
+<script>
+{
+// Four training methods race live, each in its own worker, on the same brain and the same task.
+// Each flies a quarter of the formation, left to right, so you watch which part of the name sharpens first.
+const FL = FLIGHT, RED = [1, .18, .22], panel = document.querySelector(".panel");
+const RACE = [
+  { name: "GENETIC", task: "raceGA", c: [1, .58, .25], hex: "#ff9440" },
+  { name: "EVOLUTION", task: "raceES", c: [.4, .78, 1], hex: "#66c7ff" },
+  { name: "CROSS-ENT", task: "raceCEM", c: [.78, .52, 1], hex: "#c785ff" },
+  { name: "BACKPROP", task: "raceBP", c: [.35, 1, .55], hex: "#5aff8c" },
+];
+const quarter = (d, w) => RACE[Math.max(0, Math.min(3, Math.floor((d.tx / w + .5) * 4)))];
+FORMKIT.start({
+  tagline: "FOUR TRAINING METHODS RACE LIVE · EACH FLIES A QUARTER OF THE FLEET",
+  tint: false,
+  setup(K) {
+    RACE.forEach(r => { r.errs = []; r.brain = null; r.done = false; r.secs = 0; r.err = 0; });
+    // Until its method has a brain, a quarter flies a blank one: too little thrust to lift off, so it waits on the ground.
+    K.fleet.brain = new Float32Array(DRONE.GENES);
+    if (K.still || K.tier === 0) { RACE.forEach(r => { r.brain = Float32Array.from(DRONE_BRAIN); r.done = true; }); return; }
+    RACE.forEach(r => {
+      const w = new Worker("drone-sim.js?task=" + r.task), pause = () => w.postMessage({ pause: document.hidden });
+      document.addEventListener("visibilitychange", pause);
+      w.onmessage = ({ data }) => {
+        Object.assign(r, { brain: data.best, err: data.err, secs: data.secs }); r.errs.push(data.err);
+        if (data.done) { r.done = true; w.terminate(); document.removeEventListener("visibilitychange", pause); }
+      };
+    });
+  },
+  // Each quarter flies its method's latest brain, in its colour, red while off its slot.
+  update(K) {
+    const w = K.fleet.shape().w;
+    for (const d of K.fleet.drones) {
+      const r = quarter(d, w), e = Math.min(1, Math.hypot(d.x - d.tx, d.y - d.ty) / 1.5);
+      d.brain = r.brain;
+      d.r += (RED[0] * e + r.c[0] * (1 - e) - d.r) * .1; d.g += (RED[1] * e + r.c[1] * (1 - e) - d.g) * .1; d.b += (RED[2] * e + r.c[2] * (1 - e) - d.b) * .1;
+    }
+  },
+  mode(K) {
+    if (K.st.hand) return ["HAND FLYING", FL.AMBER];
+    const done = RACE.filter(r => r.done);
+    if (done.length < RACE.length) return ["TRAINING RACE · " + done.length + " OF 4 DONE", FL.AMBER];
+    const win = done.reduce((a, b) => (b.secs < a.secs ? b : a));
+    return [K.W < 560 ? win.name + " WON" : "RACE OVER · " + win.name + " WON IN " + win.secs.toFixed(1) + " S", FL.GREEN];
+  },
+  // The race board above the links: each method's error curve on a log scale, and its time once trained.
+  hud(K) {
+    const h = K.h, w = Math.min(340, K.W - 32), ht = 56, x = (K.W - w) / 2, y = panel.getBoundingClientRect().top - ht - 40;
+    if (y < K.H * .5) return;
+    h.fillStyle = "#04080acc"; h.fillRect(x, y, w, ht); h.strokeStyle = "#7dff9b55"; h.lineWidth = 1; h.strokeRect(x + .5, y + .5, w - 1, ht - 1);
+    h.font = "9px ui-monospace,Menlo,monospace"; h.textBaseline = "alphabetic";
+    const lo = Math.log(.05), hi = Math.log(5);
+    RACE.forEach((r, k) => {
+      const col = x + k * w / 4, label = r.done ? r.secs.toFixed(1) + " S" : r.errs.length ? (r.err > 50 ? "CRASH" : r.err.toFixed(2) + " M") : "...";
+      h.textAlign = "left"; h.fillStyle = r.hex;
+      h.fillText(r.name, col + 2, y - 20); h.fillText(label + (r.done ? " ✓" : ""), col + 2, y - 8);
+      if (r.errs.length < 2) return;
+      const n = Math.max(60, ...RACE.map(q => q.errs.length));
+      h.strokeStyle = r.hex; h.lineWidth = 1.5; h.beginPath();
+      r.errs.forEach((e, i) => {
+        const v = Math.max(0, Math.min(1, (Math.log(Math.max(e, .05)) - lo) / (hi - lo))), px = x + 4 + i / (n - 1) * (w - 8), py = y + ht - 4 - v * (ht - 8);
+        i ? h.lineTo(px, py) : h.moveTo(px, py);
+      });
+      h.stroke();
+    });
+  },
+});
+}
+</script>
+</body>
+</html>

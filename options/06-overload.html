@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#d7ff00">
+<style>
+:root{--acid:#d7ff00;--hot:#ff2e88;--ink:#0a0a0a;--cy:#00e5ff;--paper:#f4f1e8}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0;background:var(--ink);overflow:hidden;color:var(--paper);font-family:"Arial Black","Helvetica Neue",Arial,sans-serif;touch-action:manipulation}
+.bg{position:fixed;inset:-80px;background-image:linear-gradient(#ffffff14 1px,#0000 1px),linear-gradient(90deg,#ffffff14 1px,#0000 1px);background-size:40px 40px;animation:grid 3s linear infinite}
+@keyframes grid{to{transform:translate(40px,40px)}}
+.tape{position:fixed;left:-15%;width:130%;overflow:hidden;white-space:nowrap;font-size:clamp(14px,1.8vw,24px);padding:.35em 0;z-index:2;border-block:3px solid var(--ink);pointer-events:none}
+.tape div{display:inline-block;animation:run 18s linear infinite;will-change:transform}
+.tape.r div{animation-direction:reverse}
+@keyframes run{to{transform:translateX(-50%)}}
+.t1{top:7%;transform:rotate(-3deg);background:var(--acid);color:var(--ink)}
+.t2{bottom:17%;transform:rotate(2.2deg);background:var(--hot);color:#fff}
+.t3{top:30%;transform:rotate(11deg);background:repeating-linear-gradient(-45deg,#000 0 22px,var(--acid) 22px 44px);color:#0000;height:26px;z-index:1;opacity:.92}
+main{position:fixed;inset:0;display:flex;flex-direction:column;justify-content:center;padding:0 clamp(12px,3vw,48px);z-index:3;pointer-events:none}
+h1{margin:0;line-height:.84;font-size:clamp(58px,15.3vw,280px);letter-spacing:-.05em;text-transform:uppercase;position:relative}
+h1 span{display:block;position:relative;width:max-content}
+h1 span::before,h1 span::after{content:attr(data-t);position:absolute;inset:0}
+h1 span::before{color:var(--hot);animation:g1 2.6s steps(1) infinite;mix-blend-mode:screen}
+h1 span::after{color:var(--cy);animation:g2 3.1s steps(1) infinite;mix-blend-mode:screen}
+@keyframes g1{0%,91%,100%{transform:translate(-3px,1px);clip-path:inset(0)}92%{transform:translate(-22px,0);clip-path:inset(12% 0 60% 0)}94%{transform:translate(16px,0);clip-path:inset(58% 0 12% 0)}96%{transform:translate(-9px,3px);clip-path:inset(30% 0 40% 0)}}
+@keyframes g2{0%,87%,100%{transform:translate(3px,-1px);clip-path:inset(0)}88%{transform:translate(26px,0);clip-path:inset(46% 0 30% 0)}90%{transform:translate(-14px,0);clip-path:inset(5% 0 72% 0)}}
+.sub{margin:clamp(10px,2vh,22px) 0 0;font:700 clamp(13px,1.7vw,24px) ui-monospace,Menlo,Consolas,monospace;color:var(--acid);max-width:min(100%,900px)}
+.links{display:flex;gap:12px;margin-top:clamp(12px,2.5vh,26px);pointer-events:auto;flex-wrap:wrap}
+.links a{display:block;font-size:clamp(20px,3.6vw,56px);text-decoration:none;color:var(--ink);background:var(--paper);padding:.18em .5em;box-shadow:7px 7px 0 var(--hot);transition:transform .1s,box-shadow .1s}
+.links a+a{box-shadow:7px 7px 0 var(--cy);background:var(--acid)}
+.links a:hover,.links a:focus-visible{transform:translate(4px,4px);box-shadow:3px 3px 0 #fff}
+.sticker{position:fixed;z-index:5;cursor:grab;user-select:none;-webkit-user-select:none;touch-action:none;will-change:transform;font:800 clamp(11px,1.1vw,15px) ui-monospace,Menlo,Consolas,monospace;line-height:1.15;text-align:center}
+.sticker:active{cursor:grabbing}
+.box{background:var(--paper);color:var(--ink);padding:8px 12px;border:3px solid var(--ink);box-shadow:4px 4px 0 #000}
+.badge{width:clamp(96px,12vw,170px);aspect-ratio:1}
+.badge svg{width:100%;height:100%;display:block;animation:spin 9s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+.badge b{position:absolute;inset:0;display:grid;place-items:center;font-size:clamp(24px,3.6vw,52px);color:var(--ink)}
+.pop{position:fixed;z-index:7;width:min(280px,76vw);background:#c7c7c7;color:#000;border:2px solid;border-color:#fff #333 #333 #fff;font:12px ui-sans-serif,system-ui,sans-serif;box-shadow:6px 6px 0 #000b}
+.pop header{background:linear-gradient(90deg,#000f91,#1084d0);color:#fff;padding:3px 6px;font-weight:700}
+.pop p{margin:0;padding:12px}
+.pop button{display:block;margin:0 auto 10px;padding:4px 26px;font:inherit;background:#c7c7c7;border:2px solid;border-color:#fff #333 #333 #fff;cursor:pointer}
+.pop button:active{border-color:#333 #fff #fff #333}
+.trail{position:fixed;left:0;top:0;z-index:8;pointer-events:none;font:700 15px ui-monospace,Menlo,monospace;color:var(--acid);opacity:0;transition:opacity .5s linear}
+@media (max-width:700px){.hide-m{display:none}.loss{left:6%!important;top:auto!important;bottom:5%}#pop{left:8%!important;top:2.5%!important}.badge{top:19%!important}}
+@media (prefers-reduced-motion:reduce){.bg,.tape div,.badge svg,h1 span::before,h1 span::after{animation:none}}
+</style>
+</head>
+<body>
+<div class="bg"></div>
+<div class="tape t1"><div id="t1"></div></div>
+<div class="tape t3"></div>
+<div class="tape t2 r"><div id="t2"></div></div>
+<main>
+  <h1 id="name"></h1>
+  <p class="sub" id="sub"></p>
+  <div class="links"><a id="gh" rel="me noopener">GITHUB ↗</a><a id="li" rel="me noopener">LINKEDIN ↗</a></div>
+</main>
+<div class="sticker badge" style="right:4%;top:13%">
+  <svg viewBox="0 0 200 200" aria-hidden="true"><circle cx="100" cy="100" r="100" fill="#d7ff00"/><path id="arc" d="M100 100m-74 0a74 74 0 1 1 148 0a74 74 0 1 1-148 0" fill="none"/><text font-size="19" font-weight="900" fill="#0a0a0a" letter-spacing="2.2"><textPath href="#arc" id="ring"></textPath></text></svg>
+  <b>AK</b>
+</div>
+<div class="sticker box loss" style="left:61%;top:62%;transform:rotate(7deg);background:var(--cy)">LOSS: 0.0001<br>(TRUST ME)</div>
+<div class="sticker box hide-m" style="left:5%;top:13%;transform:rotate(-9deg);background:var(--hot);color:#fff">GPU GO BRRRRR</div>
+<div class="sticker box hide-m" style="right:7%;bottom:27%;transform:rotate(-5deg)">100% ORGANIC<br>GRADIENTS</div>
+<div class="sticker box" style="right:5%;bottom:5%;transform:rotate(4deg);background:var(--acid)">DRAG ME</div>
+<div class="sticker box hide-m" style="left:38%;top:5%;transform:rotate(3deg)">NOT A BUBBLE*</div>
+<div class="pop sticker" id="pop" style="left:calc(50% - 90px);top:9%;font-weight:400;text-align:left">
+  <header>sticker.exe</header><p>Warning: this page has too many stickers.</p><button id="ok">OK</button>
+</div>
+<script src="../config.js"></script>
+<script>
+const S = SITE, $ = id => document.getElementById(id);
+$("name").innerHTML = S.lines(false)[0].split(" ").map(w => '<span data-t="' + w + '">' + w + "</span>").join("");
+// Scale the name so the longest word always fits the screen.
+function fitName() {
+  const h = $("name"), avail = h.parentElement.clientWidth - parseFloat(getComputedStyle(h.parentElement).paddingLeft) * 2;
+  h.style.fontSize = "100px";
+  const widest = Math.max(...[...h.children].map(s => s.offsetWidth));
+  h.style.fontSize = Math.min(avail / widest * 98, innerHeight * .24) + "px";
+}
+S.ready(fitName); addEventListener("resize", fitName);
+$("sub").textContent = "> " + S.roles.join(" / ");
+$("ring").textContent = (S.alias.toUpperCase() + " ★ ").repeat(3);
+$("gh").href = S.github; $("li").href = S.linkedin;
+const items = [S.alias.toUpperCase(), "ATTENTION IS ALL YOU NEED", S.role.toUpperCase(), "GRADIENTS DESCENDED", S.first.toUpperCase() + " WAS HERE", "SHIP IT", "OVERFIT AND PROUD"].join("  ★  ") + "  ★  ";
+$("t1").textContent = items.repeat(4); $("t2").textContent = items.repeat(4);
+
+// Drag anything with a sticker class.
+let zTop = 10;
+function draggable(el) {
+  const base = el.style.transform || "";
+  let dx = 0, dy = 0, sx, sy, on = false;
+  el.addEventListener("pointerdown", e => {
+    if (e.target.tagName === "BUTTON") return;
+    on = true; sx = e.clientX - dx; sy = e.clientY - dy; el.setPointerCapture(e.pointerId); el.style.zIndex = ++zTop;
+  });
+  el.addEventListener("pointermove", e => {
+    if (!on) return;
+    dx = e.clientX - sx; dy = e.clientY - sy;
+    el.style.transform = "translate(" + dx + "px," + dy + "px) " + base;
+  });
+  el.addEventListener("pointerup", () => on = false);
+}
+document.querySelectorAll(".sticker").forEach(draggable);
+
+// OK spawns two more, up to a limit. Then they all give up.
+const messages = ["Are you sure?", "Too many stickers remain.", "Have you tried GitHub instead?", "Task failed successfully.", "This dialog was not necessary.", "Have you tried LinkedIn instead?"];
+let spawned = 0;
+function wire(pop) {
+  pop.querySelector("button").onclick = () => {
+    pop.remove();
+    if (spawned > 12) { document.querySelectorAll(".pop").forEach(p => p.remove()); return; }
+    for (let i = 0; i < 2; i++) {
+      spawned++;
+      const n = document.createElement("div"); n.className = "pop sticker";
+      n.style.cssText = "font-weight:400;text-align:left;left:" + Math.random() * Math.max(10, innerWidth - 300) + "px;top:" + Math.random() * Math.max(10, innerHeight - 160) + "px;z-index:" + (++zTop);
+      n.innerHTML = "<header>sticker.exe</header><p>" + messages[Math.random() * messages.length | 0] + "</p><button>OK</button>";
+      document.body.append(n); draggable(n); wire(n);
+    }
+  };
+}
+wire($("pop"));
+
+// Cursor leaves a trail of binary, using a small fixed pool.
+if (matchMedia("(hover:hover)").matches && !matchMedia("(prefers-reduced-motion: reduce)").matches) {
+  const pool = Array.from({ length: 22 }, () => { const d = document.createElement("div"); d.className = "trail"; document.body.append(d); return d; });
+  let i = 0, lx = 0, ly = 0;
+  addEventListener("pointermove", e => {
+    if (Math.hypot(e.clientX - lx, e.clientY - ly) < 26) return;
+    lx = e.clientX; ly = e.clientY;
+    const d = pool[i = (i + 1) % pool.length];
+    d.textContent = Math.random() < .5 ? "0" : "1";
+    d.style.transition = "none"; d.style.opacity = 1;
+    d.style.transform = "translate(" + lx + "px," + ly + "px)";
+    requestAnimationFrame(() => { d.style.transition = ""; d.style.opacity = 0; });
+  }, { passive: true });
+}
+</script>
+</body>
+</html>

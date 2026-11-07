@@ -1,0 +1,246 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#04030d">
+<style>
+*{box-sizing:border-box}
+html,body{height:100%;margin:0;background:#04030d;color:#f2f0ff;overflow:hidden;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+#c{position:fixed;inset:0;width:100%;height:100%;display:block}
+h1{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}
+.hud{position:fixed;left:clamp(16px,3vw,36px);top:max(16px,env(safe-area-inset-top));font-size:12px;line-height:1.6;pointer-events:none}
+.hud b{font-weight:700;color:#4affc3}
+.title{font-size:clamp(13px,1.4vw,17px);letter-spacing:.14em;color:#c7c2ff;margin-bottom:4px}
+#loss{display:block;width:210px;height:36px;margin-top:4px}
+.foot{position:fixed;left:0;right:0;bottom:0;display:flex;justify-content:space-between;align-items:flex-end;gap:12px;flex-wrap:wrap;padding:0 clamp(16px,3vw,36px) max(18px,env(safe-area-inset-bottom));pointer-events:none}
+.tag{font-size:12px;color:#a59fd8;line-height:1.5}.tag b{display:block;font-size:14px;color:#fff;font-weight:600}
+.links{display:flex;gap:10px;pointer-events:auto}
+a{color:#04030d;background:#4affc3;padding:11px 18px;text-decoration:none;font-weight:700;font-size:13px}
+a+a{background:#ff5ca8}a:hover,a:focus-visible{background:#fff}
+</style>
+</head>
+<body>
+<h1 id="sr"></h1>
+<canvas id="c" role="img" aria-label="Particles flowing from random noise into this person's name, driven by a generative model"></canvas>
+<div class="hud">
+  <div class="title">NOISE → LETTERS</div>
+  <div>STEP <b id="step">0</b> · LOSS <b id="lossV">...</b></div>
+  <div id="status">training on your device</div>
+  <canvas id="loss"></canvas>
+</div>
+<div class="foot">
+  <div class="tag"><b id="who"></b>A generative model that learned these letters. It stores no images, only weights.</div>
+  <div class="links"><a id="gh" rel="me noopener">GitHub</a><a id="li" rel="me noopener">LinkedIn</a></div>
+</div>
+<script src="../config.js"></script>
+<script id="wk" type="text/plain">
+// Conditional flow matching: given a letter and a point in time, predict the velocity that carries noise to that letter.
+const NF = 40, CL = 26, F = NF * 2 + 8 + CL, A = 128, B = 128;
+const iW1 = 0, iB1 = F * A, iW2 = iB1 + A, iB2 = iW2 + A * B, iW3 = iB2 + B, iB3 = iW3 + B * 2, SIZE = iB3 + 2;
+const p = new Float32Array(SIZE), g = new Float32Array(SIZE), m = new Float32Array(SIZE), v = new Float32Array(SIZE);
+const freq = [], f = new Float32Array(F), a1 = new Float32Array(A), a2 = new Float32Array(B), d1 = new Float32Array(A), out = new Float32Array(2);
+const gauss = () => Math.sqrt(-2 * Math.log(1 - Math.random())) * Math.cos(6.2832 * Math.random());
+let letters, keys, stepN = 0, ema = null, adamT = 0, running = true, perSlot = 150, MAX = 6000, phrases, lastSample = -1e9;
+const NOISE = .62;
+function init() {
+  for (let i = 0; i < NF; i++) freq.push([gauss() * 1.6, gauss() * 1.6]);
+  for (let i = 0; i < F * A; i++) p[iW1 + i] = gauss() * Math.sqrt(1 / F);
+  for (let i = 0; i < A * B; i++) p[iW2 + i] = gauss() * Math.sqrt(2 / A);
+  for (let i = 0; i < B * 2; i++) p[iW3 + i] = gauss() * .01;
+}
+function feats(x, y, t, cls) {
+  for (let i = 0; i < NF; i++) { const q = 6.2832 * (freq[i][0] * x + freq[i][1] * y); f[i * 2] = Math.sin(q); f[i * 2 + 1] = Math.cos(q); }
+  const o = NF * 2;
+  for (let k = 0; k < 4; k++) { const q = (k + 1) * 3.1416 * t; f[o + k * 2] = Math.sin(q); f[o + k * 2 + 1] = Math.cos(q); }
+  const c = o + 8; f.fill(0, c, c + CL); f[c + cls] = 2;
+}
+function forward() {
+  for (let i = 0; i < A; i++) { let s = p[iB1 + i]; const r = iW1 + i * F; for (let j = 0; j < F; j++) s += p[r + j] * f[j]; a1[i] = s > 0 ? s : 0; }
+  for (let i = 0; i < B; i++) { let s = p[iB2 + i]; const r = iW2 + i * A; for (let j = 0; j < A; j++) s += p[r + j] * a1[j]; a2[i] = s > 0 ? s : 0; }
+  for (let k = 0; k < 2; k++) { let s = p[iB3 + k]; const r = iW3 + k * B; for (let j = 0; j < B; j++) s += p[r + j] * a2[j]; out[k] = s; }
+}
+function trainStep(batch) {
+  g.fill(0); let loss = 0;
+  for (let b = 0; b < batch; b++) {
+    const key = keys[Math.random() * keys.length | 0], pts = letters[key], k = Math.random() * (pts.length / 2) | 0;
+    const x1 = pts[k * 2], y1 = pts[k * 2 + 1], x0 = gauss() * NOISE, y0 = gauss() * NOISE, t = Math.random();
+    feats(x0 + (x1 - x0) * t, y0 + (y1 - y0) * t, t, key);
+    forward();
+    const ex = out[0] - (x1 - x0), ey = out[1] - (y1 - y0);
+    loss += ex * ex + ey * ey;
+    g[iB3] += 2 * ex; g[iB3 + 1] += 2 * ey;
+    d1.fill(0);
+    for (let i = 0; i < B; i++) {
+      if (a2[i] <= 0) continue;
+      g[iW3 + i] += 2 * ex * a2[i]; g[iW3 + B + i] += 2 * ey * a2[i];
+      const de = 2 * ex * p[iW3 + i] + 2 * ey * p[iW3 + B + i], r = iW2 + i * A;
+      g[iB2 + i] += de;
+      for (let j = 0; j < A; j++) if (a1[j] > 0) { g[r + j] += de * a1[j]; d1[j] += de * p[r + j]; }
+    }
+    for (let i = 0; i < A; i++) {
+      if (a1[i] <= 0) continue;
+      const r = iW1 + i * F, de = d1[i]; g[iB1 + i] += de;
+      for (let j = 0; j < F; j++) g[r + j] += de * f[j];
+    }
+  }
+  adamT++;
+  const lr = Math.max(.0003, .002 * Math.pow(.5, stepN / 1800)), c1 = 1 - Math.pow(.9, adamT), c2 = 1 - Math.pow(.999, adamT);
+  for (let i = 0; i < SIZE; i++) {
+    const d = g[i] / batch;
+    m[i] = .9 * m[i] + .1 * d; v[i] = .999 * v[i] + .001 * d * d;
+    p[i] -= lr * (m[i] / c1) / (Math.sqrt(v[i] / c2) + 1e-8);
+  }
+  stepN++;
+  return loss / batch;
+}
+// Integrate from noise to letters for one phrase, keeping the whole trajectory for the page to replay.
+function sample(phrase, steps, per) {
+  const slots = phrase.filter(c => c >= 0), count = slots.length * per, traj = new Float32Array(count * 2 * (steps + 1));
+  for (let i = 0; i < count; i++) { traj[i * 2] = gauss() * NOISE; traj[i * 2 + 1] = gauss() * NOISE; }
+  for (let s = 0; s < steps; s++) {
+    const o0 = s * count * 2, o1 = (s + 1) * count * 2, t = s / steps;
+    for (let i = 0; i < count; i++) {
+      const x = traj[o0 + i * 2], y = traj[o0 + i * 2 + 1];
+      feats(x, y, t, slots[i / per | 0]); forward();
+      traj[o1 + i * 2] = x + out[0] / steps; traj[o1 + i * 2 + 1] = y + out[1] / steps;
+    }
+  }
+  return { traj, steps, per };
+}
+function burst() {
+  if (!running) return;
+  const t0 = performance.now();
+  while (performance.now() - t0 < 110) { const l = trainStep(48); ema = ema === null ? l : ema * .98 + l * .02; }
+  postMessage({ type: "progress", step: stepN, loss: ema });
+  if (stepN >= MAX) {
+    running = false;
+    phrases.forEach((ph, i) => { const r = sample(ph, 16, perSlot); postMessage({ type: "final", index: i, traj: r.traj, steps: r.steps, per: r.per }, [r.traj.buffer]); });
+    postMessage({ type: "done" });
+    return;
+  }
+  if (performance.now() - lastSample > 5500) {
+    lastSample = performance.now();
+    const r = sample(phrases[0], 10, perSlot >> 1);
+    postMessage({ type: "sample", traj: r.traj, steps: r.steps, per: r.per }, [r.traj.buffer]);
+  }
+  setTimeout(burst, 80);
+}
+onmessage = ({ data }) => {
+  if (data.type === "init") { letters = data.letters; keys = Object.keys(letters).map(Number); phrases = data.phrases; perSlot = data.perSlot; MAX = data.maxSteps; init(); burst(); }
+  if (data.type === "pause") running = false;
+  if (data.type === "resume" && !running && stepN < MAX) { running = true; burst(); }
+};
+</script>
+<script>
+{
+const S = SITE, $ = id => document.getElementById(id), tier = S.tier();
+$("sr").textContent = S.full; $("who").textContent = S.full + " · " + S.role;
+$("gh").href = S.github; $("li").href = S.linkedin;
+const c = $("c"), x = c.getContext("2d", { alpha: false });
+const PHRASES = [[S.first.toUpperCase(), S.last.toUpperCase()], ["ML", "ENGINEER"], ["PILOT"]];
+const code = ch => ch.charCodeAt(0) - 65;
+const encoded = PHRASES.map(lines => lines.join("").split("").map(code));
+const perSlot = [90, 170, innerWidth < 700 ? 200 : 320][tier];
+function lettersData() {
+  const used = new Set(encoded.flat()), out = {}, G = 72;
+  const m = document.createElement("canvas"); m.width = m.height = G;
+  const g = m.getContext("2d", { willReadFrequently: true });
+  for (const k of used) {
+    g.clearRect(0, 0, G, G);
+    g.font = '900 ' + (G * .82) + 'px "Arial Black","Helvetica Neue",Arial,sans-serif'; g.textAlign = "center"; g.textBaseline = "middle"; g.fillStyle = "#fff";
+    g.fillText(String.fromCharCode(65 + k), G / 2, G * .52);
+    const d = g.getImageData(0, 0, G, G).data, list = [];
+    for (let y = 0; y < G; y++) for (let a = 0; a < G; a++) if (d[(y * G + a) * 4 + 3] > 128) list.push(a / G * 2 - 1, 1 - y / G * 2);
+    out[k] = Float32Array.from(list);
+  }
+  return out;
+}
+let W, H, dpr, cell;
+function layout() {
+  W = innerWidth; H = innerHeight; dpr = Math.min(devicePixelRatio || 1, tier === 2 ? 1.5 : 1);
+  c.width = W * dpr; c.height = H * dpr; x.setTransform(dpr, 0, 0, dpr, 0, 0);
+  x.fillStyle = "#04030d"; x.fillRect(0, 0, W, H);
+  cell = Math.min((W - 24) / 10.4, H * .62 / 2.1);
+}
+// Each phrase's particles go in groups, one group per letter slot, and each slot has a screen position.
+function slotCenters(lines) {
+  const out = [], cy = H * .47;
+  lines.forEach((l, r) => {
+    const y = cy + (r - (lines.length - 1) / 2) * cell * 1.1;
+    [...l].forEach((_, i) => out.push([W / 2 + (i - (l.length - 1) / 2) * cell * 1.02, y]));
+  });
+  return out;
+}
+const STOPS = [[74, 255, 195], [111, 157, 255], [255, 92, 168], [255, 209, 102]];
+const colorAt = t => { const u = Math.max(0, Math.min(.999, t)) * (STOPS.length - 1), a = u | 0, f = u - a; return "rgb(" + STOPS[a].map((v, k) => v + (STOPS[a + 1][k] - v) * f | 0).join(",") + ")"; };
+const palette = Array.from({ length: 40 }, (_, i) => colorAt(i / 39));
+let current = null, queue = [], finals = [], phase = 0, dwell = 0, finishedTraining = false, tour = 0, phraseOf = 0, losses = [], stopped = false;
+function show(entry, index) { current = { ...entry, index, centers: slotCenters(PHRASES[index]) }; phase = 0; }
+function draw(u) {
+  const tr = current, st = tr.steps, s = Math.min(st - 1e-3, u * st), i0 = s | 0, f = s - i0, count = tr.traj.length / (2 * (st + 1));
+  const o0 = i0 * count * 2, o1 = (i0 + 1) * count * 2, arr = tr.traj, half = cell * .5;
+  x.fillStyle = "rgba(4,3,13,.34)"; x.fillRect(0, 0, W, H);
+  // Early on, particles spread across the whole screen, then converge onto their letters.
+  const spread = Math.pow(1 - u, 2) * (W < 700 ? 2.4 : 3.2), size = W < 700 ? 1.4 : 1.7;
+  for (let i = 0; i < count; i++) {
+    const slot = i / tr.per | 0, cen = tr.centers[slot];
+    const a = arr[o0 + i * 2] + (arr[o1 + i * 2] - arr[o0 + i * 2]) * f, b = arr[o0 + i * 2 + 1] + (arr[o1 + i * 2 + 1] - arr[o0 + i * 2 + 1]) * f;
+    const px = cen[0] + a * half * (1 + spread * 2), py = cen[1] - b * half * (1 + spread);
+    x.fillStyle = palette[Math.max(0, Math.min(39, cen[0] / W * 39 | 0))];
+    x.fillRect(px, py, size, size);
+  }
+}
+function drawLoss() {
+  const l = $("loss"), r = l.getBoundingClientRect(), d = Math.min(devicePixelRatio || 1, 2);
+  if (l.width !== (r.width * d | 0)) { l.width = r.width * d; l.height = r.height * d; }
+  const g = l.getContext("2d"); g.setTransform(d, 0, 0, d, 0, 0); g.clearRect(0, 0, r.width, r.height);
+  if (losses.length < 2) return;
+  const hi = Math.max(...losses), lo = Math.min(...losses);
+  g.strokeStyle = "#4affc3"; g.lineWidth = 1.5; g.beginPath();
+  losses.forEach((v, i) => { const a = i / (losses.length - 1) * r.width, b = r.height - 2 - (v - lo) / (hi - lo || 1) * (r.height - 4); i ? g.lineTo(a, b) : g.moveTo(a, b); });
+  g.stroke();
+}
+let last = 0;
+function frame(t) {
+  if (stopped) return;
+  requestAnimationFrame(frame);
+  if (document.hidden) { last = t; return; }
+  const dt = Math.min(.05, (t - last) / 1000); last = t;
+  if (!current) { if (queue.length) show(queue.shift(), 0); return; }
+  if (phase < 1) {
+    phase = Math.min(1, phase + dt / 2.5);
+    draw(phase * phase * (3 - 2 * phase));
+    if (phase === 1) dwell = 2.4;
+  } else if (dwell > 0) {
+    dwell -= dt;
+    if (dwell > 1.8) draw(1);
+  } else if (finishedTraining && finals.length === PHRASES.length) {
+    // The final tour through what you do, ending on the name, then stop drawing altogether.
+    tour++;
+    if (tour > PHRASES.length) { stopped = true; $("status").textContent = "done. your CPU is resting."; return; }
+    show(finals[tour % PHRASES.length], tour % PHRASES.length);
+  } else if (queue.length) { show(queue.shift(), 0); queue.length = 0; }
+}
+let rt, bw = innerWidth;
+addEventListener("resize", () => { if (innerWidth === bw) return; bw = innerWidth; clearTimeout(rt); rt = setTimeout(() => { layout(); if (current) current.centers = slotCenters(PHRASES[current.index]); }, 150); });
+S.ready(() => {
+  layout();
+  const worker = new Worker(URL.createObjectURL(new Blob([$("wk").textContent], { type: "text/javascript" })));
+  worker.onmessage = ({ data: d }) => {
+    if (d.type === "progress") {
+      $("step").textContent = d.step.toLocaleString(); $("lossV").textContent = d.loss.toFixed(3);
+      losses.push(d.loss); if (losses.length > 200) losses.shift(); drawLoss();
+    }
+    if (d.type === "sample") { queue.length = 0; queue.push(d); }
+    if (d.type === "final") finals[d.index] = d;
+    if (d.type === "done") { finishedTraining = true; worker.terminate(); $("status").textContent = "trained. generating what you do."; }
+  };
+  worker.postMessage({ type: "init", letters: lettersData(), phrases: encoded, perSlot, maxSteps: [2600, 4000, 6000][tier] });
+  document.addEventListener("visibilitychange", () => worker.postMessage({ type: document.hidden ? "pause" : "resume" }));
+  requestAnimationFrame(frame);
+});
+}
+</script>
+</body>
+</html>

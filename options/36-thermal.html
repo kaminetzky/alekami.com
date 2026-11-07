@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#000010">
+<style>
+html,body{height:100%;margin:0;background:#000010;color:#fff;overflow:hidden;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;touch-action:manipulation}
+canvas{position:fixed;inset:0;width:100%;height:100%;display:block;cursor:crosshair}
+.ui{position:fixed;left:0;right:0;bottom:max(16px,env(safe-area-inset-bottom));display:flex;flex-direction:column;align-items:center;gap:9px;pointer-events:none;text-align:center;padding:0 16px}
+h1{margin:0;font-size:12px;font-weight:400;letter-spacing:.16em;text-transform:uppercase;text-shadow:0 1px 3px #000}
+.links{display:flex;gap:10px;pointer-events:auto}
+a{color:#fff;border:1px solid #ffffffaa;background:#00000066;padding:9px 16px;text-decoration:none;font-size:13px;letter-spacing:.1em}
+a:hover,a:focus-visible{background:#fff;color:#000}
+</style>
+</head>
+<body>
+<canvas id="c" role="img" aria-label="A thermal camera looking down from a drone. A fleet of drones, hot spots in the image, gathers into this person's name. Tap to change the palette."></canvas>
+<div class="ui"><h1 id="role"></h1><div class="links"><a id="gh" rel="me noopener">GITHUB</a><a id="li" rel="me noopener">LINKEDIN</a></div></div>
+<script src="../config.js"></script>
+<script>
+{
+const S = SITE, $ = id => document.getElementById(id);
+$("role").textContent = S.full + " · " + S.role; $("gh").href = S.github; $("li").href = S.linkedin;
+const c = $("c"), x = c.getContext("2d");
+const still = matchMedia("(prefers-reduced-motion: reduce)").matches, small = Math.min(innerWidth, innerHeight) < 600;
+const N = small ? 340 : 420;
+
+// Palettes as 256-entry lookup tables.
+const lut = stops => { const t = new Uint8Array(768); for (let i = 0; i < 256; i++) { const v = i / 255; let k = 0; while (k < stops.length - 2 && v > stops[k + 1][0]) k++; const [a, ca] = stops[k], [b, cb] = stops[k + 1], f = Math.min(1, Math.max(0, (v - a) / (b - a))); for (let j = 0; j < 3; j++) t[i * 3 + j] = ca[j] + (cb[j] - ca[j]) * f; } return t; };
+const PALETTES = [
+  ["IRONBOW", lut([[0, [0, 0, 16]], [.15, [32, 0, 80]], [.35, [138, 15, 138]], [.55, [217, 58, 32]], [.75, [245, 160, 10]], [.9, [255, 228, 106]], [1, [255, 255, 255]]])],
+  ["WHITE HOT", lut([[0, [0, 0, 0]], [1, [255, 255, 255]]])],
+  ["BLACK HOT", lut([[0, [255, 255, 255]], [1, [0, 0, 0]]])],
+  ["RAINBOW", lut([[0, [10, 0, 60]], [.2, [0, 60, 255]], [.4, [0, 220, 200]], [.6, [80, 255, 40]], [.8, [255, 200, 0]], [1, [255, 30, 30]]])],
+];
+let pal = 0;
+
+let W, H, dpr, HW, HH, GW, GH, ground, heat, img, lo, lg, drones = [], targets = [];
+// The ground below, as a heat map: fields, roads, roofs, tree clumps and a cold river.
+function buildGround() {
+  GW = Math.round(HW * 1.6); GH = Math.round(HH * 1.6); ground = new Float32Array(GW * GH);
+  const rnd = (i, j) => { const s = Math.sin(i * 12.99 + j * 78.23) * 43758.55; return s - Math.floor(s); };
+  for (let j = 0; j < GH; j++) for (let i = 0; i < GW; i++) ground[j * GW + i] = .22 + rnd(i / 14 | 0, j / 11 | 0) * .2 + rnd(i, j) * .04;
+  const put = (i, j, v) => { if (i >= 0 && j >= 0 && i < GW && j < GH) ground[(j | 0) * GW + (i | 0)] = v; };
+  for (let k = 0; k < 4; k++) { const y0 = Math.random() * GH, sl = (Math.random() - .5) * .6; for (let i = 0; i < GW; i++) for (let w = 0; w < 2; w++) put(i, y0 + i * sl + w, .62); }
+  for (let k = 0; k < 3; k++) { const x0 = Math.random() * GW; for (let j = 0; j < GH; j++) for (let w = 0; w < 2; w++) put(x0 + Math.sin(j * .05) * 6 + w, j, .6); }
+  for (let j = 0; j < GH; j++) { const rx = GW * .7 + Math.sin(j * .04) * GW * .12; for (let w = -3; w <= 3; w++) put(rx + w, j, .05); }
+  for (let k = 0; k < 26; k++) { const bx = Math.random() * GW, by = Math.random() * GH, bw = 4 + Math.random() * 7, bh = 4 + Math.random() * 6, v = .7 + Math.random() * .15; for (let a = 0; a < bw; a++) for (let b = 0; b < bh; b++) put(bx + a, by + b, v); put(bx + 2, by + 2, .97); }
+  for (let k = 0; k < 40; k++) { const tx = Math.random() * GW, ty = Math.random() * GH, r = 1.5 + Math.random() * 3; for (let a = -r; a <= r; a++) for (let b = -r; b <= r; b++) if (a * a + b * b <= r * r) put(tx + a, ty + b, .12 + Math.random() * .05); }
+}
+// Name slots, sampled from text drawn at the thermal resolution.
+function buildTargets() {
+  const m = document.createElement("canvas"); m.width = HW; m.height = HH;
+  const g = m.getContext("2d", { willReadFrequently: true }), lines = S.lines(W / H < 1);
+  g.font = '900 100px "Arial Black","Helvetica Neue",Arial,sans-serif';
+  const widest = Math.max(...lines.map(l => g.measureText(l).width)), size = Math.min(100 * HW * .9 / widest, HH * .5 / lines.length);
+  g.font = g.font.replace("100px", size + "px"); g.fillStyle = "#fff"; g.textAlign = "center"; g.textBaseline = "middle";
+  lines.forEach((l, i) => g.fillText(l, HW / 2, HH * .42 + (i - (lines.length - 1) / 2) * size * 1.05));
+  const d = g.getImageData(0, 0, HW, HH).data;
+  let list = [];
+  for (let step = 4; step >= 1; step -= .25) {
+    list = [];
+    for (let y = step / 2; y < HH; y += step) for (let a = step / 2; a < HW; a += step) if (d[((y | 0) * HW + (a | 0)) * 4 + 3] > 120) list.push([a, y]);
+    if (list.length >= N) break;
+  }
+  for (let i = list.length - 1; i > 0; i--) { const j = Math.random() * (i + 1) | 0, t = list[i]; list[i] = list[j]; list[j] = t; }
+  targets = Array.from({ length: N }, (_, i) => list[i % list.length]);
+}
+function layout() {
+  W = innerWidth; H = innerHeight; dpr = Math.min(devicePixelRatio || 1, 2);
+  c.width = W * dpr; c.height = H * dpr;
+  HW = small ? 180 : 220; HH = Math.round(HW * H / W);
+  lo = document.createElement("canvas"); lo.width = HW; lo.height = HH; lg = lo.getContext("2d"); img = lg.createImageData(HW, HH); heat = new Float32Array(HW * HH);
+  buildGround(); buildTargets();
+  if (!drones.length) drones = Array.from({ length: N }, () => { const a = Math.random() * 6.28, r = HW * (.7 + Math.random() * .4); return { x: HW / 2 + Math.cos(a) * r, y: HH / 2 + Math.sin(a) * r, vx: 0, vy: 0, ph: Math.random() * 6.28 }; });
+}
+
+// Phases: gather into the name and hover, then scatter, then gather again.
+let phase = "gather", phaseT = 0, scatter = [];
+function step(dt, t) {
+  phaseT += dt;
+  if (phase === "gather" && phaseT > 11) { phase = "scatter"; phaseT = 0; scatter = drones.map(() => { const a = Math.random() * 6.28, r = Math.min(HW, HH) * (.25 + Math.random() * .3); return [HW / 2 + Math.cos(a) * r * HW / Math.min(HW, HH) * .8, HH * .45 + Math.sin(a) * r]; }); }
+  else if (phase === "scatter" && phaseT > 3.2) { phase = "gather"; phaseT = 0; }
+  drones.forEach((d, i) => {
+    const tg = phase === "gather" ? targets[i] : scatter[i];
+    const ax = 7 * (tg[0] - d.x) - 4.6 * d.vx + Math.sin(t * 3 + d.ph) * 2, ay = 7 * (tg[1] - d.y) - 4.6 * d.vy + Math.cos(t * 2.6 + d.ph) * 2;
+    d.vx += ax * dt; d.vy += ay * dt; d.x += d.vx * dt; d.y += d.vy * dt;
+  });
+}
+function render(t) {
+  // Ground drifts slowly as the camera holds position in the wind.
+  const ox = Math.round((GW - HW) / 2 + Math.sin(t * .05) * (GW - HW) * .45), oy = Math.round((GH - HH) / 2 + Math.cos(t * .037) * (GH - HH) * .45);
+  for (let j = 0; j < HH; j++) heat.set(ground.subarray((j + oy) * GW + ox, (j + oy) * GW + ox + HW), j * HW);
+  // Each drone: hot motors and a faint warm halo from its downwash.
+  for (const d of drones) {
+    const i0 = Math.round(d.x), j0 = Math.round(d.y);
+    for (let b = -2; b <= 2; b++) for (let a = -2; a <= 2; a++) {
+      const i = i0 + a, j = j0 + b; if (i < 0 || j < 0 || i >= HW || j >= HH) continue;
+      const q = a * a + b * b, k = j * HW + i;
+      heat[k] = Math.max(heat[k], q === 0 ? 1 : q <= 2 ? .88 : heat[k] + .06);
+    }
+  }
+  const L = PALETTES[pal][1], px = img.data;
+  for (let k = 0; k < heat.length; k++) {
+    const v = Math.max(0, Math.min(255, (heat[k] + (Math.random() - .5) * .035) * 255 | 0)) * 3, o = k * 4;
+    px[o] = L[v]; px[o + 1] = L[v + 1]; px[o + 2] = L[v + 2]; px[o + 3] = 255;
+  }
+  lg.putImageData(img, 0, 0);
+  x.setTransform(1, 0, 0, 1, 0, 0); x.imageSmoothingEnabled = true; x.drawImage(lo, 0, 0, c.width, c.height);
+  overlay(t);
+}
+// Camera overlay: brackets, crosshair, telemetry and the palette scale.
+function overlay(t) {
+  x.setTransform(dpr, 0, 0, dpr, 0, 0);
+  const vg = x.createRadialGradient(W / 2, H / 2, Math.min(W, H) * .3, W / 2, H / 2, Math.max(W, H) * .75);
+  vg.addColorStop(0, "rgba(0,0,0,0)"); vg.addColorStop(1, "rgba(0,0,0,.55)"); x.fillStyle = vg; x.fillRect(0, 0, W, H);
+  x.strokeStyle = "#ffffffdd"; x.fillStyle = "#fff"; x.lineWidth = 1.5; x.shadowColor = "#000"; x.shadowBlur = 3;
+  const bx = W * .12, by = H * .14, bl = 22;
+  for (const [px, py, sx, sy] of [[bx, by, 1, 1], [W - bx, by, -1, 1], [bx, H - by, 1, -1], [W - bx, H - by, -1, -1]]) { x.beginPath(); x.moveTo(px, py + sy * bl); x.lineTo(px, py); x.lineTo(px + sx * bl, py); x.stroke(); }
+  const cx = W / 2, cy = H / 2;
+  x.beginPath(); x.moveTo(cx - 26, cy); x.lineTo(cx - 8, cy); x.moveTo(cx + 8, cy); x.lineTo(cx + 26, cy); x.moveTo(cx, cy - 26); x.lineTo(cx, cy - 8); x.moveTo(cx, cy + 8); x.lineTo(cx, cy + 26); x.stroke();
+  x.font = "11px ui-monospace,Menlo,monospace"; x.textBaseline = "top";
+  const pad = 16, top = Math.max(14, H * .02), sec = Math.floor(t);
+  x.textAlign = "left"; x.fillText("FLIR · IR 640 · " + PALETTES[pal][0], pad, top); x.fillText("GIMBAL -90.0° · ZOOM 1.0×", pad, top + 15); x.fillText("FLEET " + N + " · FORMATION " + (phase === "gather" ? "HOLD" : "RESET"), pad, top + 30);
+  x.textAlign = "right";
+  x.fillText("REC " + [sec / 3600 | 0, (sec / 60 | 0) % 60, sec % 60].map(v => String(v).padStart(2, "0")).join(":"), W - pad, top);
+  x.fillText("ALT 120 M AGL · GPS 14", W - pad, top + 15); x.fillText("TAP · PALETTE", W - pad, top + 30);
+  if (sec % 2 === 0) { x.fillStyle = "#ff3030"; x.beginPath(); x.arc(W - pad - x.measureText("REC 00:00:00").width - 9, top + 6, 4, 0, 6.3); x.fill(); x.fillStyle = "#fff"; }
+  // Palette scale.
+  const L = PALETTES[pal][1], sw = Math.min(160, W * .3), sy = top + 52;
+  for (let i = 0; i < sw; i++) { const v = (i / sw * 255 | 0) * 3; x.fillStyle = "rgb(" + L[v] + "," + L[v + 1] + "," + L[v + 2] + ")"; x.fillRect(pad + i, sy, 1, 7); }
+  x.fillStyle = "#fff"; x.textAlign = "left"; x.fillText("-5°C", pad, sy + 11); x.textAlign = "right"; x.fillText("62°C", pad + sw, sy + 11);
+  x.shadowBlur = 0;
+}
+let last = 0, clock = 0, acc = 0;
+function frame(now) {
+  requestAnimationFrame(frame);
+  if (document.hidden) { last = now; return; }
+  const dt = Math.min(.05, (now - last) / 1000); last = now; clock += dt; acc += dt;
+  step(dt, clock);
+  if (acc < 1 / 30) return; acc = 0; // a thermal sensor refreshes at 30 Hz
+  render(clock);
+}
+c.addEventListener("click", () => { pal = (pal + 1) % PALETTES.length; if (still) render(clock); });
+addEventListener("resize", () => { layout(); if (still) settle(); });
+function settle() { drones.forEach((d, i) => { d.x = targets[i][0]; d.y = targets[i][1]; }); render(0); }
+S.ready(() => { layout(); if (still) settle(); else requestAnimationFrame(frame); });
+}
+</script>
+</body>
+</html>

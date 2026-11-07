@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#000000">
+<style>
+html,body{height:100%;margin:0;background:#000;color:#3dff6e;overflow:hidden;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+canvas{position:fixed;inset:0;width:100%;height:100%;display:block}
+canvas.glow{filter:drop-shadow(0 0 2px #3dff6e) drop-shadow(0 0 6px #3dff6e88)}
+.top{position:fixed;left:0;right:0;top:max(14px,env(safe-area-inset-top));display:flex;justify-content:space-between;padding:0 18px;font-size:13px;letter-spacing:.2em;pointer-events:none;text-shadow:0 0 6px #3dff6e}
+.links{position:fixed;left:50%;transform:translateX(-50%);bottom:max(18px,env(safe-area-inset-bottom));display:flex;gap:14px}
+a{color:#3dff6e;border:1.5px solid #3dff6e;padding:9px 18px;text-decoration:none;font-size:13px;letter-spacing:.18em;text-shadow:0 0 6px #3dff6e;box-shadow:0 0 8px #3dff6e55,inset 0 0 8px #3dff6e33}
+a:hover,a:focus-visible{background:#3dff6e;color:#000;text-shadow:none}
+</style>
+</head>
+<body>
+<canvas id="c" role="img" aria-label="Retro vector graphics: this person's name as giant 3D wireframe letters on a vector plain under a moon, seen from a banking aircraft"></canvas>
+<div class="top"><span id="role"></span><span id="score">1UP 000000</span></div>
+<div class="links"><a id="gh" rel="me noopener">GITHUB</a><a id="li" rel="me noopener">LINKEDIN</a></div>
+<script src="../config.js"></script>
+<script src="letters.js"></script>
+<script src="gl3d.js"></script>
+<script>
+{
+const S = SITE, G3 = GL3D, $ = id => document.getElementById(id);
+$("role").textContent = S.role.toUpperCase(); $("gh").href = S.github; $("li").href = S.linkedin;
+const c = $("c"), gl = c.getContext("webgl", { antialias: true, alpha: false });
+if (!gl) { S.noWebGL(); throw new Error("WebGL unavailable"); }
+const still = matchMedia("(prefers-reduced-motion: reduce)").matches, small = Math.min(innerWidth, innerHeight) < 600, tier = S.tier(gl);
+if (tier === 2 && !small) c.classList.add("glow");
+const prog = G3.program(gl, "attribute vec3 aP; attribute vec4 aC; uniform mat4 uM; uniform vec3 uEye; varying vec4 vC; void main(){ gl_Position=uM*vec4(aP,1.); vC=aC; vC.a*=smoothstep(17000.,3000.,length(aP-uEye)); gl_PointSize=2.; }",
+  "precision mediump float; varying vec4 vC; void main(){ gl_FragColor=vec4(vC.rgb*vC.a,1.); }");
+const buf = gl.createBuffer(), GREEN = [.24, 1, .43];
+
+// Static scenery: a ground grid, a ring of jagged mountains, a cratered moon and a few stars.
+const scenery = [], stars = [];
+const line = (a, b, k) => scenery.push(...a, ...GREEN, k, ...b, ...GREEN, k);
+for (let v = -12000; v <= 12000; v += 400) { line([v, 0, -9000], [v, 0, 9000], .3); }
+for (let v = -9000; v <= 9000; v += 400) { line([-12000, 0, v], [12000, 0, v], .3); }
+{
+  const R = 15000, n = 110, peak = i => { const s = Math.sin(i * 12.9898) * 43758.5; return 700 + (s - Math.floor(s)) * 1900 * (.6 + .4 * Math.sin(i * .21)); };
+  for (let i = 0; i < n; i++) {
+    const a0 = i / n * 6.2832, a1 = (i + 1) / n * 6.2832, h0 = peak(i), h1 = peak(i + 1);
+    line([Math.sin(a0) * R, h0, -Math.cos(a0) * R], [Math.sin(a1) * R, h1, -Math.cos(a1) * R], .75);
+    if (i % 3 === 0) line([Math.sin(a0) * R, h0, -Math.cos(a0) * R], [Math.sin(a0) * R, 0, -Math.cos(a0) * R], .45);
+  }
+  const mc = [-5200, 5200, -14000], circ = (cx, cy, r, k) => { for (let i = 0; i < 40; i++) { const a = i / 40 * 6.2832, b = (i + 1) / 40 * 6.2832; line([mc[0] + cx + Math.cos(a) * r, mc[1] + cy + Math.sin(a) * r, mc[2]], [mc[0] + cx + Math.cos(b) * r, mc[1] + cy + Math.sin(b) * r, mc[2]], k); } };
+  circ(0, 0, 900, .9); circ(-280, 220, 170, .5); circ(260, -150, 230, .5); circ(120, 380, 90, .45);
+  for (let i = 0; i < 220; i++) { const a = Math.random() * 6.28, e = .12 + Math.random() * .9, r = 16000; stars.push(Math.sin(a) * Math.cos(e) * r, Math.sin(e) * r, -Math.cos(a) * Math.cos(e) * r, ...GREEN, .25 + Math.random() * .5); }
+}
+// The name: every stroke of the single-line font becomes a square tube, drawn as a box of 12 edges.
+let letters = [], NW = 0, NH = 0, CY = 0;
+function build() {
+  const { strokes, width, height } = LETTERS.strokes(S.lines(innerWidth / innerHeight < 1)), s = 70, w = .42 * s, d = 70, lift = (height / 2) * s + 60;
+  NW = width * s; NH = height * s; CY = lift; letters = [];
+  const L = (a, b) => letters.push(...a, ...GREEN, 1, ...b, ...GREEN, 1);
+  for (const poly of strokes) for (let i = 1; i < poly.length; i++) {
+    const ax = poly[i - 1][0] * s, ay = poly[i - 1][1] * s + lift, bx = poly[i][0] * s, by = poly[i][1] * s + lift;
+    const l = Math.hypot(bx - ax, by - ay), ux = (bx - ax) / l, uy = (by - ay) / l, nx = -uy * w, ny = ux * w;
+    const corners = [[ax - ux * w + nx, ay - uy * w + ny], [bx + ux * w + nx, by + uy * w + ny], [bx + ux * w - nx, by + uy * w - ny], [ax - ux * w - nx, ay - uy * w - ny]];
+    for (let k = 0; k < 4; k++) {
+      const p = corners[k], q = corners[(k + 1) % 4];
+      L([p[0], p[1], d], [q[0], q[1], d]); L([p[0], p[1], -d], [q[0], q[1], -d]); L([p[0], p[1], d], [p[0], p[1], -d]);
+    }
+  }
+  letters = new Float32Array(letters);
+}
+const sceneryData = new Float32Array(scenery), starData = new Float32Array(stars);
+
+let W, H, aspect = 1;
+function size() {
+  W = innerWidth; H = innerHeight; aspect = W / H;
+  const dpr = Math.min(devicePixelRatio || 1, 2); c.width = W * dpr; c.height = H * dpr; gl.viewport(0, 0, c.width, c.height);
+}
+// The aircraft weaves back and forth in front of the letters, banking into each turn.
+function render(t) {
+  const th = t * 6.2832 / 46, span = Math.max(NW, NH * aspect);
+  const eye = [NW * .32 * Math.sin(th), CY + 160 + 160 * Math.sin(th * 2), span * (.95 + .2 * Math.cos(th)) / Math.min(1, aspect)];
+  const M = G3.mul(G3.perspective(.95, aspect, 20, 40000), G3.lookAt(eye, [eye[0] * .3, CY, 0], -.3 * Math.sin(th)));
+  gl.clearColor(0, 0, 0, 1); gl.clear(gl.COLOR_BUFFER_BIT);
+  gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE);
+  const L = [["aP", 3], ["aC", 4]], U = { uM: M, uEye: eye };
+  G3.draw(gl, prog, buf, sceneryData, L, gl.LINES, sceneryData.length / 7, U);
+  G3.draw(gl, prog, buf, starData, L, gl.POINTS, starData.length / 7, U);
+  G3.draw(gl, prog, buf, letters, L, gl.LINES, letters.length / 7, U);
+  $("score").textContent = "1UP " + String(Math.floor(t * 137) % 1000000).padStart(6, "0");
+}
+let last = 0, clock = 0;
+function frame(now) {
+  requestAnimationFrame(frame);
+  if (document.hidden) { last = now; return; }
+  const dt = Math.min(.05, (now - last) / 1000); last = now; clock += dt;
+  render(clock);
+}
+addEventListener("resize", () => { size(); build(); if (still) render(6); });
+S.ready(() => { size(); build(); if (still) render(6); else requestAnimationFrame(frame); });
+}
+</script>
+</body>
+</html>

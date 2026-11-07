@@ -1,0 +1,201 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#07061a">
+<style>
+html,body{height:100%;margin:0;background:#07061a;color:#7dff9b;overflow:hidden;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;touch-action:none;user-select:none;-webkit-user-select:none}
+canvas{position:fixed;inset:0;width:100%;height:100%;display:block}
+#hud{cursor:grab}
+#hud:active{cursor:grabbing}
+.panel{position:fixed;left:50%;bottom:max(14px,env(safe-area-inset-bottom));transform:translateX(-50%);display:flex;flex-direction:column;align-items:center;gap:8px;width:min(100% - 24px,640px);pointer-events:none;text-align:center}
+h1{margin:0;font-size:clamp(16px,2.2vw,30px);font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:#d4ffe0;text-shadow:0 0 14px #2dff6e,0 1px 3px #000}
+.role{margin:0;font-size:clamp(10px,1.05vw,13px);letter-spacing:.12em;color:#ffcf6a;text-shadow:0 1px 3px #000}
+.radio{display:flex;gap:10px;pointer-events:auto;width:100%;justify-content:center}
+a{flex:0 1 230px;color:#ffcf6a;background:#070a0cdd;border:1px solid #7dff9b66;text-decoration:none;padding:9px 10px;font-size:clamp(11px,1.1vw,13px);font-weight:700;letter-spacing:.06em;white-space:nowrap}
+a:hover,a:focus-visible{background:#7dff9b;color:#04140a}
+</style>
+</head>
+<body>
+<canvas id="c" aria-hidden="true"></canvas>
+<canvas id="hud" aria-label="Flight display. The aircraft flies an approach and touch and go on a lit runway, then climbs through a drone formation of this person's name and fields. Drag to fly."></canvas>
+<div class="panel">
+  <h1 id="name"></h1>
+  <p class="role" id="role"></p>
+  <div class="radio">
+    <a id="gh" rel="me noopener">GITHUB</a>
+    <a id="li" rel="me noopener">LINKEDIN</a>
+  </div>
+</div>
+<script src="../config.js"></script>
+<script src="shapes.js"></script>
+<script src="flight.js"></script>
+<script src="drone-sim.js"></script>
+<script src="fleet.js"></script>
+<script>
+{
+const S = SITE, FL = FLIGHT, DEG = FL.DEG, $ = id => document.getElementById(id);
+$("name").textContent = S.full; $("role").textContent = "CLEARED FOR THE OPTION · " + S.role.toUpperCase();
+$("gh").href = S.github; $("li").href = S.linkedin;
+const c = $("c"), gl = c.getContext("webgl", { antialias: true, alpha: false, powerPreference: "high-performance" });
+if (!gl) { S.noWebGL(); throw new Error("WebGL unavailable"); }
+const still = matchMedia("(prefers-reduced-motion: reduce)").matches;
+const RES = [.55, .8, 1], tier = S.tier(gl), small = Math.min(innerWidth, innerHeight) < 600;
+let level = tier;
+const govern = S.governor(level, l => { level = l; size(); });
+// Gentler hills, so approaches are flown over open country.
+const AMP = .4; FL.setAmp(AMP);
+const world = FL.scene(gl, [84, 120, small ? 110 : 170][tier]);
+const F = FL.aircraft(), fleet = FLEET.create(gl, world, [300, 700, small ? 900 : 1400][tier]), O = fleet.O;
+const hud = $("hud"), h = hud.getContext("2d"), st = FL.stick(hud, F);
+
+// ---------- Runways ----------
+// A 3 degree glideslope to an aim point 300 m past the threshold, from a pilot's eye 3 m above the wheels.
+const GS = 3 * DEG, TAN = Math.tan(GS), AIM = 300, EYE = 3, LEN = 1100, WID = 45;
+F.minAGL = EYE;
+let rw = null, clock = 0;
+const lightsOf = r => {
+  const pts = [], add = (a, l, col, y) => {
+    const x = r.x + r.ax * a + r.lx * l, z = r.z + r.az * a + r.lz * l;
+    pts.push(x, y === undefined ? r.h + 1 : y, z, ...col);
+  };
+  for (let a = 0; a <= LEN; a += 60) { add(a, -WID / 2, [1, .92, .75, 1]); add(a, WID / 2, [1, .92, .75, 1]); }
+  for (let l = -22; l <= 22; l += 4) { add(0, l, [.3, 1, .45, 1]); add(LEN, l, [1, .2, .2, 1]); }
+  for (let a = 30; a < LEN; a += 30) add(a, 0, [.85, .9, 1, .55]);
+  for (let a = 60; a <= 600; a += 60) for (const l of [-10, -7, 7, 10]) add(a, l, [1, 1, 1, .7]);
+  for (let a = -900; a <= -60; a += 60) for (let l = -6; l <= 6; l += 3) add(a, l, [1, .95, .85, .85], r.h + 2);
+  for (let l = -24; l <= 24; l += 3) add(-300, l, [1, .95, .85, .85]);
+  // Towns off to the sides, for a sense of night and scale.
+  for (let k = 0; k < 7; k++) {
+    const ca = -3000 + Math.random() * 7000, cl = (Math.random() < .5 ? -1 : 1) * (900 + Math.random() * 2600);
+    for (let i = 0; i < 55; i++) {
+      const a = ca + (Math.random() - .5) * 500, l = cl + (Math.random() - .5) * 500;
+      const x = r.x + r.ax * a + r.lx * l, z = r.z + r.az * a + r.lz * l;
+      pts.push(x, FL.terrain(x, z) + 2, z, ...(Math.random() < .7 ? [1, .66, .3, .75] : [.85, .9, 1, .6]));
+    }
+  }
+  return new Float32Array(pts);
+};
+// Without a distance, the runway goes where the current altitude meets the glideslope, so every approach starts established.
+function placeRunway(dist, psi) {
+  const ax = Math.sin(psi), az = Math.cos(psi), elev = d => FL.raw(F.x + ax * (d + LEN / 2), F.z + az * (d + LEN / 2)) * AMP;
+  if (!dist) { dist = 4300; for (let i = 0; i < 3; i++) dist = FL.clamp((F.alt - elev(dist) - EYE) / TAN - AIM - 400, 7500); dist = Math.max(3200, dist); }
+  const x = F.x + ax * dist, z = F.z + az * dist, hRw = elev(dist);
+  const slot = rw ? 1 - rw.slot : 0, deg = Math.round(((psi / DEG) % 360 + 360) % 360 / 10) || 36;
+  // Level a valley for the approach, the runway and the climb out. It settles in over a few seconds.
+  const zone = { x, z, psi, a0: -dist - 600, a1: LEN + 2400, hw: 170, h: hRw, k: 0 };
+  FL.setZone(slot, zone);
+  rw = { x, z, psi, ax, az, lx: az, lz: -ax, h: hRw, slot, zone, at: clock, num: String(deg).padStart(2, "0") };
+  rw.lights = lightsOf(rw); rw.dist = dist;
+  // The formation hangs over the climb out, past the far end of the runway.
+  fleet.next();
+  const fx = x + ax * (LEN + 1500), fz = z + az * (LEN + 1500);
+  fleet.frame(fx, Math.max(hRw + 260, fleet.clearance(fx, fz, psi, fleet.shape())), fz, psi, false);
+  O.passed = false; fleet.assign(fleet.shape());
+  phase = "approach";
+}
+const local = () => { const dx = F.x - rw.x, dz = F.z - rw.z; return { a: dx * rw.ax + dz * rw.az, e: dx * rw.lx + dz * rw.lz }; };
+
+// ---------- Phases: approach, flare, roll (touch and go), climb out through the formation ----------
+let phase = "approach", phaseT = 0;
+const set = p => { phase = p; phaseT = 0; };
+function steer(dt) {
+  phaseT += dt;
+  const { a, e } = local(), agl = F.alt - rw.h - EYE;
+  const psiT = rw.psi - FL.clamp(e * .004, .45), hold = { phi: FL.clamp(FL.wrap(psiT - F.psi) * 1.1, 6 * DEG) };
+  if (rw.zone.k < 1) rw.zone.k = Math.min(1, (clock - rw.at) / 3);
+  if (phase === "approach") {
+    F.vRef = 110;
+    if (agl < 12 && a > -250 && a < LEN) set("flare");
+    if (a > LEN + 200) set("climb"); // went long, so go around
+  } else if (phase === "flare") {
+    if (agl < .4) set("roll");
+  } else if (phase === "roll") {
+    F.vRef = 60;
+    if (phaseT > 2.4) { set("climb"); F.vRef = 118; }
+  } else if (phase === "climb") {
+    F.vRef = 118;
+    const p = fleet.plane(F);
+    if (!O.passed && p.ps > 30) { O.passed = true; O.passT = clock; }
+    if (O.passed && clock - O.passT > .6) placeRunway(0, F.psi + (st.hand ? 0 : (Math.random() - .5) * 1));
+  }
+  if (Math.hypot(F.x - rw.x, F.z - rw.z) > 9500) placeRunway(0, F.psi);
+  if (st.hand) return st.want(dt);
+  if (phase === "approach") return FL.autopilot(F, dt, psiT, rw.h + EYE + Math.max(0, AIM - a) * TAN, true, -GS);
+  if (phase === "flare") return { phi: hold.phi, theta: -.7 * DEG };
+  if (phase === "roll") return { phi: hold.phi, theta: 0 };
+  if (agl < 70) return { phi: hold.phi, theta: 10 * DEG };
+  return FL.autopilot(F, dt, O.passed ? F.psi : Math.atan2(O.x - F.x, O.z - F.z), O.passed ? undefined : O.y);
+}
+
+// ---------- Frame ----------
+let W, H, aspect = 1;
+function size() {
+  W = innerWidth; H = innerHeight; aspect = W / H;
+  const dpr = Math.min(devicePixelRatio || 1, small ? 1.5 : 1.75) * RES[level];
+  c.width = W * dpr; c.height = H * dpr; gl.viewport(0, 0, c.width, c.height);
+  hud.width = W * Math.min(devicePixelRatio || 1, 2); hud.height = H * Math.min(devicePixelRatio || 1, 2);
+}
+const live = new Float32Array(5 * 7);
+function draw() {
+  const cam = FL.basis(F), R = world.render(F, cam, aspect), ctx = { R, P: F, aspect, height: c.height };
+  fleet.render(ctx);
+  // Runway lights, the sequenced flasher running toward the threshold, and a PAPI that reads your real glidepath.
+  fleet.extra(Object.assign({ size: 3.2 }, ctx), rw.lights, false);
+  const { a } = local(), angle = Math.atan2(F.alt - rw.h - EYE, Math.max(1, AIM - a)) / DEG;
+  const ra = -900 + Math.floor((clock * 2 % 1) * 11) * 60;
+  const put = (i, al, l, col) => { live.set([rw.x + rw.ax * al + rw.lx * l, rw.h + 2.5, rw.z + rw.az * al + rw.lz * l, ...col], i * 7); };
+  put(0, ra, 0, [1, 1, 1, 1.6]);
+  [2.5, 2.83, 3.17, 3.5].forEach((th, i) => put(1 + i, AIM, -WID / 2 - 40 + i * 9, angle > th ? [1, 1, 1, 1.3] : [1, .15, .15, 1.3]));
+  fleet.extra(Object.assign({ size: 6 }, ctx), live, false);
+
+  const tight = W < 560, f = fleet;
+  const fl = !f.brain ? "FLEET BOOTING" : !f.trained ? "FLEET LEARNING · GEN " + f.gen : "";
+  const words = { approach: "APPROACH RWY " + rw.num + (tight ? "" : " · GS 3.0°"), flare: "FLARE", roll: "TOUCH AND GO", climb: O.passed ? "CLIMB OUT" : "CLIMB · FLY THROUGH" };
+  const mode = (st.hand ? "HAND FLYING · " : "") + words[phase] + (fl ? " · " + fl : "");
+  FL.hud(hud, h, W, H, F, mode, st.hand || fl ? FL.AMBER : FL.GREEN, st);
+  const tag = FL.project(cam, F, rw.x, rw.h + 30, rw.z, W, H);
+  if (phase === "approach" && tag.z > 200 && tag.x > 20 && tag.x < W - 20 && tag.y > 70 && tag.y < H - 20) {
+    h.fillStyle = "#ff77d0"; h.font = "bold 12px ui-monospace,Menlo,monospace"; h.textAlign = "center"; h.textBaseline = "alphabetic";
+    h.fillText("RWY " + rw.num + " · " + (Math.hypot(rw.x - F.x, rw.z - F.z) / 1852).toFixed(1) + " NM", tag.x, tag.y - 10);
+  }
+  const sh = f.shape(), ft = FL.project(cam, F, O.x, O.y + sh.h / 2 * f.K + 70, O.z, W, H);
+  if (!O.passed && sh.cap && ft.z > 300 && ft.x > 20 && ft.x < W - 20 && ft.y > 70 && ft.y < H - 20) {
+    h.fillStyle = "#ff77d0"; h.font = "bold 12px ui-monospace,Menlo,monospace"; h.textAlign = "center"; h.textBaseline = "alphabetic";
+    h.fillText(sh.cap, ft.x, ft.y);
+  }
+}
+let last = 0;
+function frame(t) {
+  requestAnimationFrame(frame);
+  if (document.hidden) { last = t; return; }
+  govern(t);
+  const dt = Math.min(.05, (t - last) / 1000); last = t; clock += dt;
+  FL.fly(F, dt, steer(dt));
+  fleet.step(dt, F, fleet.shape().hue);
+  draw();
+}
+let rt, bw = innerWidth;
+addEventListener("resize", () => {
+  size(); if (still) draw();
+  if (innerWidth === bw) return;
+  bw = innerWidth; clearTimeout(rt);
+  rt = setTimeout(() => { fleet.build(innerWidth / innerHeight < 1); fleet.assign(fleet.shape()); }, 150);
+});
+S.ready(() => {
+  bw = innerWidth; size(); fleet.build(innerWidth / innerHeight < 1);
+  // Start established on final, 3.6 km out on the glideslope.
+  fleet.index = fleet.shapes.length - 1;
+  placeRunway(3600, 0); rw.zone.k = 1; rw.at = -10;
+  F.alt = rw.h + EYE + (AIM + 3600) * TAN; F.vRef = 110; F.v = 110;
+  fleet.drones.forEach(fleet.park);
+  if (still) {
+    fleet.drones.forEach(d => { d.x = d.tx; d.y = d.ty; d.s = 0; });
+    draw();
+  } else { fleet.train(); requestAnimationFrame(frame); }
+});
+}
+</script>
+</body>
+</html>
