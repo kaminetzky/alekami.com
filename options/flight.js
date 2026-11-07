@@ -341,7 +341,8 @@ void main(){
     h.strokeStyle = INK; h.lineWidth = 1.5;
     h.beginPath(); h.arc(vx, vy, 6, 0, 6.3); h.moveTo(vx - 6, vy); h.lineTo(vx - 18, vy); h.moveTo(vx + 6, vy); h.lineTo(vx + 18, vy); h.moveTo(vx, vy - 6); h.lineTo(vx, vy - 13); h.stroke();
 
-    // Bank scale: an arc from 60 degrees left to 60 right, with ticks and a fixed index at the top.
+    // Bank scale: an arc from 60 degrees left to 60 right, with ticks and a fixed index at the top. A page can leave it out (opt.bank false).
+    if (!opt || opt.bank !== false) {
     h.strokeStyle = INK; h.lineWidth = 1.3;
     h.save(); h.translate(cx, H / 2);
     h.beginPath(); h.arc(0, 0, R, -150 * DEG, -30 * DEG); h.stroke();
@@ -353,6 +354,7 @@ void main(){
     h.rotate(-F.phi);
     h.fillStyle = ACC; h.beginPath(); h.moveTo(0, -R + 2); h.lineTo(-7, -R + 13); h.lineTo(7, -R + 13); h.fill();
     h.restore();
+    }
     }
 
     // Speed and altitude tapes. A page can leave them out (opt.tapes false), as on phones where they crowd the view.
