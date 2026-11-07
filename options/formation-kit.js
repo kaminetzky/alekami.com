@@ -22,8 +22,9 @@ window.FORMKIT = (function () {
     const still = matchMedia("(prefers-reduced-motion: reduce)").matches;
     const RES = [.55, .8, 1], tier = S.tier(gl), small = Math.min(innerWidth, innerHeight) < 600;
     let level = tier;
-    // Frame budget: full devices draw at 60 fps; reduced ones, and any device whose frames run slow, draw at 30.
-    let fps = tier === 2 ? 60 : 30;
+    // Frame budget: 60 fps, unless frames actually run slow (the governor) or it's the weakest tier; then 30.
+    // Not by tier alone: phones report few cores and would be capped needlessly, which makes the terrain judder.
+    let fps = tier === 0 ? 30 : 60;
     const govern = S.governor(level, l => { level = l; fps = 30; size(); });
     // Terrain grid size per device. The fog ends just inside its edge, so a bigger grid sees further.
     const world = FL.scene(gl, [100, 140, small ? 150 : 170][tier]);
@@ -107,7 +108,7 @@ window.FORMKIT = (function () {
       const [text, colour] = o.mode ? o.mode(K, mode) : mode();
       // Phones drop the speed, altitude and heading tapes, which crowd a small screen, and keep the mode line clear of any notch.
       const roomy = K.W >= 600 && K.H >= 500;
-      FL.hud(hud, h, K.W, K.H, F, text, colour, st, { tapes: roomy, heading: roomy, inset: K.inset });
+      FL.hud(hud, h, K.W, K.H, F, text, colour, st, { tapes: roomy, heading: roomy, bank: roomy, inset: K.inset });
       // Tag each formation still ahead like a waypoint.
       for (const f of fleets) {
         const O = f.O, sh = f.shape(), tag = FL.project(cam, F, O.x, O.y + sh.h / 2 * f.K + 70, O.z, K.W, K.H);
@@ -185,7 +186,17 @@ window.FORMKIT = (function () {
     });
   }
   // The training curve above the links: error per generation on a log scale, from 5 m down to 5 cm.
+  // It shows while the brain trains, stays 3 seconds once trained, then fades out over 1.5 seconds.
   function curve(K) {
+    const f = K.fleet;
+    if (f.trained && K.trainedAt === undefined) K.trainedAt = K.clock;
+    const fade = f.trained ? 1 - Math.min(1, Math.max(0, (K.clock - K.trainedAt - 3) / 1.5)) : 1;
+    if (fade <= 0) return;
+    K.h.save(); K.h.globalAlpha = fade;
+    drawCurve(K);
+    K.h.restore();
+  }
+  function drawCurve(K) {
     // As wide as the links under it.
     const panel = document.querySelector(".panel").getBoundingClientRect();
     const f = K.fleet, h = K.h, w = panel.width, ht = 50, x = panel.left, y = panel.top - ht - 26;
