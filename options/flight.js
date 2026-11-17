@@ -203,7 +203,10 @@ void main(){
     F.alt += F.vs * dt;
     F.alt = Math.max(F.alt, terrain(F.x, F.z) + (F.minAGL || 24));
     F.v += ((F.vRef || 118) - Math.sin(F.theta) * 90 - F.v) * dt * .4;
-    F.g = 1 / Math.max(.3, Math.cos(F.phi));
+    // Load factor: bank (cos pitch / cos bank) plus the pull to curve the flight path up or down (airspeed times pitch rate, over g).
+    // Smoothed a little, like a real G meter.
+    const n = Math.cos(F.theta) / Math.max(.3, Math.cos(F.phi)) + F.v * .5144 * F.q / 9.81;
+    F.g += (n - F.g) * Math.min(1, dt * 6);
   }
 
   // Camera basis for the current attitude: rows are right, up and forward.
