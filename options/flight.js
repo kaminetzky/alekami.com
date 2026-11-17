@@ -23,7 +23,7 @@ window.FLIGHT = (function () {
   const VS = `
 attribute vec2 aG;
 uniform vec2 uC; uniform vec3 uCam; uniform mat3 uR; uniform float uF, uAsp, uLift;
-varying float vH, vD;
+varying float vH, vD; varying vec3 vW;
 uniform float uAmp; uniform vec4 uZa0, uZb0, uZa1, uZb1; uniform vec2 uZh;
 // Zone a: centre x, z and the sine and cosine of its heading. b: along-track start and end, half width, strength.
 float level(vec2 p, vec4 a, vec4 b, float h0, float h){
@@ -36,15 +36,27 @@ float H(vec2 p){ float h=(170.*sin(p.x*.0031+1.3*sin(p.y*.0017))+110.*sin(p.y*.0
 ${PROJECT}
 void main(){
   vec2 w=aG+uC; float h=H(w);
-  vec3 v=uR*(vec3(w.x,h+uLift,w.y)-uCam);
+  vec3 r=vec3(w.x,h+uLift,w.y)-uCam, v=uR*r;
   vD=length(v); vH=h;
+  // World direction to this point, already unit length: phones run fragment maths at half precision, which can't square distances this big.
+  vW=r/max(length(r),1.);
   gl_Position=project(v);
 }`;
+  // The sky's colour in world direction d, without stars or the sun's disc. The sky draws with it,
+  // and the terrain fogs into it, so far terrain melts exactly into the sky behind it, sun glow included.
+  const SKY_GLOW = `
+vec3 skyGlow(vec3 d, vec3 sun){
+  float y=d.y;
+  vec3 c=mix(vec3(.42,.16,.34),vec3(.13,.06,.26),smoothstep(0.,.22,y));
+  c=mix(c,vec3(.02,.02,.09),smoothstep(.15,.65,y));
+  return c+vec3(1.,.5,.25)*pow(max(dot(d,sun),0.),14.)*.55;
+}`;
   const FS = `
-precision mediump float; varying float vH, vD; uniform float uLine, uFog;
+precision mediump float; varying float vH, vD; varying vec3 vW; uniform float uLine, uFog; uniform vec3 uSun;
+${SKY_GLOW}
 void main(){
   float fog=smoothstep(uFog,uFog*.2,vD);
-  vec3 sky=vec3(.42,.16,.34);
+  vec3 sky=skyGlow(normalize(vW),uSun);
   vec3 c;
   if(uLine>.5){ float t=clamp((vH+300.)/650.,0.,1.); c=mix(vec3(.1,.95,.85),vec3(1.,.42,.75),t); c=mix(sky,c*(.55+.6*fog),fog); }
   else c=mix(sky,vec3(.015,.02,.06),fog);
@@ -53,14 +65,12 @@ void main(){
   const SKY_VS = "attribute vec2 a; varying vec2 v; void main(){v=a;gl_Position=vec4(a,.9999,1.);}";
   const SKY_FS = `
 precision mediump float; varying vec2 v; uniform mat3 uR; uniform float uF, uAsp; uniform vec3 uSun;
+${SKY_GLOW}
 float h21(vec2 p){p=fract(p*vec2(123.34,456.21));p+=dot(p,p+45.32);return fract(p.x*p.y);}
 void main(){
   vec3 d=normalize(vec3(v.x*uAsp/uF,v.y/uF,1.)*uR);
-  float y=d.y;
-  vec3 c=mix(vec3(.42,.16,.34),vec3(.13,.06,.26),smoothstep(0.,.22,y));
-  c=mix(c,vec3(.02,.02,.09),smoothstep(.15,.65,y));
-  float s=max(dot(d,uSun),0.);
-  c+=vec3(1.,.5,.25)*pow(s,14.)*.55+vec3(1.,.85,.6)*pow(s,500.)*1.4;
+  float y=d.y, s=max(dot(d,uSun),0.);
+  vec3 c=skyGlow(d,uSun)+vec3(1.,.85,.6)*pow(s,500.)*1.4;
   vec2 sc=vec2(atan(d.z,d.x),asin(clamp(y,-1.,1.)))*260.;
   vec2 g=floor(sc), fr=fract(sc)-.5;
   float st=h21(g);
@@ -139,7 +149,7 @@ void main(){
       gl.uniformMatrix3fv(u("uR"), false, R);
       gl.uniform1f(u("uF"), FOCAL); gl.uniform1f(u("uAsp"), aspect); gl.uniform1f(u("uAmp"), AMP);
       // The terrain melts fully into the sky just inside the grid's edge, so the edge and new rows never show.
-      gl.uniform1f(u("uFog"), half * .92);
+      gl.uniform1f(u("uFog"), half * .92); gl.uniform3fv(u("uSun"), sunDir);
       ZONES.forEach((zn, i) => {
         gl.uniform4f(u("uZa" + i), zn ? zn.x : 0, zn ? zn.z : 0, zn ? Math.sin(zn.psi) : 0, zn ? Math.cos(zn.psi) : 1);
         gl.uniform4f(u("uZb" + i), zn ? zn.a0 : 0, zn ? zn.a1 : 0, zn ? zn.hw : 0, zn ? zn.k : 0);
