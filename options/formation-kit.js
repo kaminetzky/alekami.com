@@ -140,7 +140,10 @@ window.FORMKIT = (function () {
       if (!(innerHeight > innerWidth && innerWidth <= 700)) return;
       h1.style.whiteSpace = "nowrap"; h1.style.fontSize = "100px";
       r.selectNodeContents(h1);
-      h1.style.fontSize = Math.floor(100 * (innerWidth - 28) / r.getBoundingClientRect().width * 10) / 10 + "px";
+      // The room inside the panel, so a padded panel (a card or window) still fits the name.
+      const box = h1.parentElement, cs = getComputedStyle(box);
+      const room = Math.min(innerWidth - 28, box.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight) - 4);
+      h1.style.fontSize = Math.floor(100 * room / r.getBoundingClientRect().width * 10) / 10 + "px";
     }
     fitName();
     addEventListener("resize", () => {
@@ -197,9 +200,10 @@ window.FORMKIT = (function () {
     K.h.restore();
   }
   function drawCurve(K) {
-    // As wide as the links under it.
-    const panel = document.querySelector(".panel").getBoundingClientRect();
-    const f = K.fleet, h = K.h, w = panel.width, ht = 50, x = panel.left, y = panel.top - ht - 26;
+    // Lined up with the row of links under it (or the whole panel if it has none), and above the panel.
+    const panel = document.querySelector(".panel").getBoundingClientRect(), links = document.querySelectorAll(".panel a");
+    const first = links.length ? links[0].getBoundingClientRect() : panel, last = links.length ? links[links.length - 1].getBoundingClientRect() : panel;
+    const f = K.fleet, h = K.h, x = first.left, w = last.right - first.left, ht = 50, y = panel.top - ht - 26;
     // Short screens (a phone on its side) have no room for it.
     if (K.H < 500 || y < K.H * .55) return;
     h.fillStyle = "#04080acc"; h.fillRect(x, y, w, ht); h.strokeStyle = "#7dff9b55"; h.lineWidth = 1; h.strokeRect(x + .5, y + .5, w - 1, ht - 1);

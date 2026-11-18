@@ -1,0 +1,232 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#07061a">
+<style>
+html,body{height:100%;margin:0;background:#07061a;color:#7dff9b;overflow:hidden;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;touch-action:none;user-select:none;-webkit-user-select:none}
+canvas{position:fixed;inset:0;width:100%;height:100%;display:block}
+#hud{cursor:grab}
+#hud:active{cursor:grabbing}
+.panel{position:fixed;left:50%;bottom:max(14px,env(safe-area-inset-bottom));transform:translateX(-50%);display:flex;flex-direction:column;align-items:center;gap:8px;width:min(100% - 24px,640px);pointer-events:none;text-align:center}
+h1{margin:0;font-size:clamp(16px,2.2vw,30px);font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:#d4ffe0;text-shadow:0 0 14px #2dff6e,0 1px 3px #000}
+.role{margin:0;font-size:clamp(10px,1.05vw,13px);letter-spacing:.12em;color:#ffcf6a;text-shadow:0 1px 3px #000;text-wrap:balance}
+.radio{display:flex;gap:10px;pointer-events:auto;width:100%;justify-content:center}
+a{flex:0 1 230px;color:#ffcf6a;background:#070a0cdd;border:1px solid #7dff9b66;text-decoration:none;padding:9px 10px;font-size:clamp(11px,1.1vw,13px);font-weight:700;letter-spacing:.06em;white-space:nowrap}
+a:hover,a:focus-visible{background:#7dff9b;color:#04140a}
+/* Phones: bigger link text. */
+@media (max-width:700px),(max-height:500px){a{font-size:15px;padding:11px 10px}}
+
+/* ---------- Bottom panel alternatives, previewed with the switcher in the corner ---------- */
+.sans{font-family:Futura,"Avenir Next","Helvetica Neue",ui-sans-serif,system-ui,sans-serif}
+/* 1 Chrome sunset: chrome gradient name, gradient-rimmed pills. */
+body.s1 h1{font-family:Futura,"Avenir Next","Helvetica Neue",ui-sans-serif,sans-serif;font-style:italic;font-weight:800;letter-spacing:.06em;background:linear-gradient(180deg,#fff 0%,#ffd6f2 38%,#ff4fb4 58%,#46e6ff 100%);-webkit-background-clip:text;background-clip:text;color:transparent;text-shadow:none;filter:drop-shadow(0 0 12px #ff4fb477)}
+body.s1 a{font-family:Futura,"Avenir Next","Helvetica Neue",ui-sans-serif,sans-serif;font-weight:600;letter-spacing:.16em;color:#fff;border-radius:999px;border:1.5px solid transparent;background:linear-gradient(#170a2ccc,#170a2ccc) padding-box,linear-gradient(90deg,#ff4fb4,#46e6ff) border-box}
+body.s1 a:hover,body.s1 a:focus-visible{background:linear-gradient(90deg,#ff4fb4,#46e6ff);color:#170a2c}
+/* 2 Outrun neon: hot pink name with a cyan offset, neon outline buttons. */
+body.s2 h1{font-family:Futura,"Avenir Next","Helvetica Neue",ui-sans-serif,sans-serif;font-style:italic;font-weight:900;letter-spacing:.04em;color:#ff71ce;text-shadow:3px 3px 0 #01cdfe,0 0 22px #ff71cecc}
+body.s2 a{font-family:Futura,"Avenir Next","Helvetica Neue",ui-sans-serif,sans-serif;font-weight:700;letter-spacing:.18em;background:#0d0420aa;color:#01cdfe;border:2px solid #01cdfe;border-radius:4px;box-shadow:0 0 14px #01cdfe66,inset 0 0 10px #01cdfe33;text-shadow:0 0 8px #01cdfe}
+body.s2 a+a{color:#ff71ce;border-color:#ff71ce;box-shadow:0 0 14px #ff71ce66,inset 0 0 10px #ff71ce33;text-shadow:0 0 8px #ff71ce}
+body.s2 a:hover,body.s2 a:focus-visible{background:#01cdfe;color:#0d0420;text-shadow:none}
+body.s2 a+a:hover,body.s2 a+a:focus-visible{background:#ff71ce}
+/* 3 Frosted glass: a blurred glass card, light wide name, quiet links. */
+body.s3 .panel{background:#ffffff12;-webkit-backdrop-filter:blur(14px) saturate(1.4);backdrop-filter:blur(14px) saturate(1.4);border:1px solid #ffffff2e;border-radius:22px;padding:16px 16px 14px;box-sizing:border-box;box-shadow:0 10px 40px #0006}
+body.s3 h1{font-family:"Avenir Next","Helvetica Neue",ui-sans-serif,sans-serif;font-weight:300;letter-spacing:.28em;color:#fff;text-shadow:0 0 18px #ff8ad888}
+body.s3 a{font-family:"Avenir Next","Helvetica Neue",ui-sans-serif,sans-serif;font-weight:500;letter-spacing:.2em;color:#ffe3f6;background:#ffffff14;border:1px solid #ffffff30;border-radius:12px}
+body.s3 a:hover,body.s3 a:focus-visible{background:#fff;color:#2a1240}
+/* 4 Minimal: just the name and two text links, no boxes. */
+body.s4 h1{font-family:"Avenir Next","Helvetica Neue",ui-sans-serif,sans-serif;font-weight:500;letter-spacing:.3em;color:#fff;text-shadow:0 0 16px #ff6fd288,0 1px 3px #000}
+body.s4 .radio{gap:28px}
+body.s4 a{flex:0 0 auto;font-family:"Avenir Next","Helvetica Neue",ui-sans-serif,sans-serif;font-weight:500;letter-spacing:.25em;color:#ffc6ee;background:none;border:0;padding:6px 2px;border-bottom:1px solid #ff8ad866}
+body.s4 a:hover,body.s4 a:focus-visible{background:none;color:#fff;border-bottom-color:#fff}
+/* 5 Pastel 95: pastel gradient name, chunky pastel buttons with hard shadows. */
+body.s5 h1{font-family:Futura,"Avenir Next","Helvetica Neue",ui-sans-serif,sans-serif;font-weight:800;letter-spacing:.08em;background:linear-gradient(90deg,#ffb3de,#c9b3ff 50%,#a6f3e4);-webkit-background-clip:text;background-clip:text;color:transparent;text-shadow:none;filter:drop-shadow(2px 2px 0 #2b1b4a)}
+body.s5 a{font-family:Futura,"Avenir Next","Helvetica Neue",ui-sans-serif,sans-serif;font-weight:700;letter-spacing:.14em;color:#2b1b4a;background:#ffb3de;border:2px solid #2b1b4a;border-radius:8px;box-shadow:4px 4px 0 #2b1b4a}
+body.s5 a+a{background:#c9b3ff}
+body.s5 a:hover,body.s5 a:focus-visible{transform:translate(2px,2px);box-shadow:2px 2px 0 #2b1b4a;background:#a6f3e4}
+/* 6 Pastel window: the panel is a little 90s window with a gradient title bar. */
+body.s6 .panel{background:#e9e1ff;border:2px solid #2b1b4a;border-radius:10px;box-shadow:5px 5px 0 #2b1b4a;padding:0 12px 12px;box-sizing:border-box;gap:10px;overflow:hidden}
+body.s6 .panel::before{content:"alekami.exe";align-self:stretch;margin:0 -12px;padding:6px 10px;text-align:left;font-family:Futura,"Avenir Next","Helvetica Neue",ui-sans-serif,sans-serif;font-weight:700;font-size:12px;letter-spacing:.08em;color:#2b1b4a;background:linear-gradient(90deg,#ff9fd6,#9fdcff);border-bottom:2px solid #2b1b4a}
+body.s6 h1{font-family:Futura,"Avenir Next","Helvetica Neue",ui-sans-serif,sans-serif;font-weight:800;letter-spacing:.08em;color:#2b1b4a;text-shadow:2px 2px 0 #ffb3de}
+body.s6 a{font-family:Futura,"Avenir Next","Helvetica Neue",ui-sans-serif,sans-serif;font-weight:700;letter-spacing:.14em;color:#2b1b4a;background:#ffb3de;border:2px solid #2b1b4a;border-radius:6px;box-shadow:3px 3px 0 #2b1b4a}
+body.s6 a+a{background:#a6f3e4}
+body.s6 a:hover,body.s6 a:focus-visible{transform:translate(2px,2px);box-shadow:1px 1px 0 #2b1b4a}
+/* 7 Pastel outline: outlined pastel name with a mint shadow, dark buttons with pastel rims. */
+body.s7 h1{font-family:Futura,"Avenir Next","Helvetica Neue",ui-sans-serif,sans-serif;font-weight:800;letter-spacing:.08em;color:#ffb3de;-webkit-text-stroke:1.5px #2b1b4a;text-shadow:4px 4px 0 #a6f3e4}
+body.s7 a{font-family:Futura,"Avenir Next","Helvetica Neue",ui-sans-serif,sans-serif;font-weight:700;letter-spacing:.14em;color:#ffb3de;background:#2b1b4add;border:2px solid #ffb3de;border-radius:8px;box-shadow:4px 4px 0 #a6f3e4}
+body.s7 a+a{color:#c9b3ff;border-color:#c9b3ff}
+body.s7 a:hover,body.s7 a:focus-visible{background:#ffb3de;color:#2b1b4a}
+body.s7 a+a:hover,body.s7 a+a:focus-visible{background:#c9b3ff}
+/* 8 Sunset: name in retro sunset colours, peach and pink buttons. */
+body.s8 h1{font-family:Futura,"Avenir Next","Helvetica Neue",ui-sans-serif,sans-serif;font-weight:800;letter-spacing:.08em;background:linear-gradient(180deg,#ffe98a 10%,#ffa98a 50%,#ff7fb8 75%,#b98cff);-webkit-background-clip:text;background-clip:text;color:transparent;text-shadow:none;filter:drop-shadow(2px 2px 0 #2b1b4a)}
+body.s8 a{font-family:Futura,"Avenir Next","Helvetica Neue",ui-sans-serif,sans-serif;font-weight:700;letter-spacing:.14em;color:#2b1b4a;background:#ffd2a8;border:2px solid #2b1b4a;border-radius:8px;box-shadow:4px 4px 0 #2b1b4a}
+body.s8 a+a{background:#ffb3de}
+body.s8 a:hover,body.s8 a:focus-visible{transform:translate(2px,2px);box-shadow:2px 2px 0 #2b1b4a;background:#ffe98a}
+/* 9 Bubbly: style 5 with round pill buttons in mint and pink. */
+body.s9 h1{font-family:Futura,"Avenir Next","Helvetica Neue",ui-sans-serif,sans-serif;font-weight:800;letter-spacing:.08em;background:linear-gradient(90deg,#ffb3de,#c9b3ff 50%,#a6f3e4);-webkit-background-clip:text;background-clip:text;color:transparent;text-shadow:none;filter:drop-shadow(2px 2px 0 #2b1b4a)}
+body.s9 a{font-family:Futura,"Avenir Next","Helvetica Neue",ui-sans-serif,sans-serif;font-weight:700;letter-spacing:.14em;color:#2b1b4a;background:#a6f3e4;border:2px solid #2b1b4a;border-radius:999px;box-shadow:3px 4px 0 #2b1b4a}
+body.s9 a+a{background:#ffb3de}
+body.s9 a:hover,body.s9 a:focus-visible{transform:translate(2px,2px);box-shadow:1px 2px 0 #2b1b4a;background:#c9b3ff}
+/* 10 Pastel glass: style 5's name over frosted glass buttons. */
+body.s10 h1{font-family:Futura,"Avenir Next","Helvetica Neue",ui-sans-serif,sans-serif;font-weight:800;letter-spacing:.08em;background:linear-gradient(90deg,#ffb3de,#c9b3ff 50%,#a6f3e4);-webkit-background-clip:text;background-clip:text;color:transparent;text-shadow:none;filter:drop-shadow(2px 2px 0 #2b1b4a)}
+body.s10 a{font-family:Futura,"Avenir Next","Helvetica Neue",ui-sans-serif,sans-serif;font-weight:700;letter-spacing:.16em;color:#fff;background:#ffffff1f;-webkit-backdrop-filter:blur(10px);backdrop-filter:blur(10px);border:1.5px solid #ffffff66;border-radius:14px}
+body.s10 a:hover,body.s10 a:focus-visible{background:#ffb3de;color:#2b1b4a;border-color:#ffb3de}
+/* 11 Chunky 3D: an extruded pastel name and buttons that press down. */
+body.s11 h1{font-family:Futura,"Avenir Next","Helvetica Neue",ui-sans-serif,sans-serif;font-weight:800;letter-spacing:.08em;color:#ffd1ec;text-shadow:1px 1px 0 #c9b3ff,2px 2px 0 #c9b3ff,3px 3px 0 #9d86e8,4px 4px 0 #9d86e8,5px 5px 0 #2b1b4a,6px 7px 10px #0009}
+body.s11 a{font-family:Futura,"Avenir Next","Helvetica Neue",ui-sans-serif,sans-serif;font-weight:700;letter-spacing:.14em;color:#2b1b4a;background:#ffd1ec;border:2px solid #2b1b4a;border-radius:10px;box-shadow:0 6px 0 #2b1b4a;margin-bottom:6px}
+body.s11 a+a{background:#d9ccff}
+body.s11 a:hover,body.s11 a:focus-visible{transform:translateY(4px);box-shadow:0 2px 0 #2b1b4a}
+/* 12 to 21: simple and square. */
+/* 12 Flat pastel: white name, flat pink and lilac squares. */
+body.s12 h1{font-family:Futura,"Avenir Next","Helvetica Neue",ui-sans-serif,sans-serif;font-weight:800;letter-spacing:.08em;color:#fff;text-shadow:none}
+body.s12 a{font-family:Futura,"Avenir Next","Helvetica Neue",ui-sans-serif,sans-serif;font-weight:700;letter-spacing:.14em;color:#2b1b4a;background:#ffb3de;border:0;border-radius:0;}
+body.s12 a+a{background:#c9b3ff}
+body.s12 a:hover,body.s12 a:focus-visible{background:#fff}
+/* 13 Underlines: pastel name, links as text over thick pastel bars. */
+body.s13 h1{font-family:Futura,"Avenir Next","Helvetica Neue",ui-sans-serif,sans-serif;font-weight:800;letter-spacing:.08em;background:linear-gradient(90deg,#ffb3de,#c9b3ff 50%,#a6f3e4);-webkit-background-clip:text;background-clip:text;color:transparent;text-shadow:none;}
+body.s13 .radio{gap:32px}
+body.s13 a{flex:0 0 auto;font-family:Futura,"Avenir Next","Helvetica Neue",ui-sans-serif,sans-serif;font-weight:700;letter-spacing:.2em;color:#fff;background:none;border:0;border-bottom:4px solid #ffb3de;padding:6px 2px;border-radius:0;}
+body.s13 a+a{border-bottom-color:#a6f3e4}
+body.s13 a:hover,body.s13 a:focus-visible{background:none;color:#ffb3de}
+/* 14 Hairline: light wide name, thin white square outlines. */
+body.s14 h1{font-family:"Avenir Next","Helvetica Neue",ui-sans-serif,sans-serif;font-weight:300;letter-spacing:.3em;color:#fff;text-shadow:none}
+body.s14 a{font-family:"Avenir Next","Helvetica Neue",ui-sans-serif,sans-serif;font-weight:500;letter-spacing:.25em;color:#fff;background:#0000;border:1px solid #ffffffaa;border-radius:0;}
+body.s14 a:hover,body.s14 a:focus-visible{background:#fff;color:#2b1b4a}
+/* 15 Split bar: one bar, pink on the left and mint on the right. */
+body.s15 h1{font-family:Futura,"Avenir Next","Helvetica Neue",ui-sans-serif,sans-serif;font-weight:800;letter-spacing:.08em;color:#fff;text-shadow:none}
+body.s15 .radio{gap:0}
+body.s15 a{font-family:Futura,"Avenir Next","Helvetica Neue",ui-sans-serif,sans-serif;font-weight:700;letter-spacing:.14em;color:#2b1b4a;background:#ffb3de;border:0;border-radius:0;}
+body.s15 a+a{background:#a6f3e4}
+body.s15 a:hover,body.s15 a:focus-visible{background:#fff}
+/* 16 Square 5: style 5 with square corners and a smaller shadow. */
+body.s16 h1{font-family:Futura,"Avenir Next","Helvetica Neue",ui-sans-serif,sans-serif;font-weight:800;letter-spacing:.08em;background:linear-gradient(90deg,#ffb3de,#c9b3ff 50%,#a6f3e4);-webkit-background-clip:text;background-clip:text;color:transparent;text-shadow:none;filter:drop-shadow(2px 2px 0 #2b1b4a)}
+body.s16 a{font-family:Futura,"Avenir Next","Helvetica Neue",ui-sans-serif,sans-serif;font-weight:700;letter-spacing:.14em;color:#2b1b4a;background:#ffb3de;border:2px solid #2b1b4a;border-radius:0;box-shadow:3px 3px 0 #2b1b4a}
+body.s16 a+a{background:#c9b3ff}
+body.s16 a:hover,body.s16 a:focus-visible{transform:translate(2px,2px);box-shadow:1px 1px 0 #2b1b4a;background:#a6f3e4}
+/* 17 Lilac: solid lilac name, solid lilac and pink squares. */
+body.s17 h1{font-family:Futura,"Avenir Next","Helvetica Neue",ui-sans-serif,sans-serif;font-weight:800;letter-spacing:.08em;color:#c9b3ff;text-shadow:none}
+body.s17 a{font-family:Futura,"Avenir Next","Helvetica Neue",ui-sans-serif,sans-serif;font-weight:700;letter-spacing:.14em;color:#2b1b4a;background:#c9b3ff;border:0;border-radius:0;}
+body.s17 a+a{background:#ffb3de}
+body.s17 a:hover,body.s17 a:focus-visible{background:#fff}
+/* 18 Pink ghost: white name, square pink outlines. */
+body.s18 h1{font-family:Futura,"Avenir Next","Helvetica Neue",ui-sans-serif,sans-serif;font-weight:800;letter-spacing:.08em;color:#fff;text-shadow:none}
+body.s18 a{font-family:Futura,"Avenir Next","Helvetica Neue",ui-sans-serif,sans-serif;font-weight:700;letter-spacing:.14em;color:#ffb3de;background:#0000;border:2px solid #ffb3de;border-radius:0;}
+body.s18 a:hover,body.s18 a:focus-visible{background:#ffb3de;color:#2b1b4a}
+/* 19 Quiet links: pastel name, small text links with a slash between. */
+body.s19 h1{font-family:Futura,"Avenir Next","Helvetica Neue",ui-sans-serif,sans-serif;font-weight:800;letter-spacing:.08em;background:linear-gradient(90deg,#ffb3de,#c9b3ff 50%,#a6f3e4);-webkit-background-clip:text;background-clip:text;color:transparent;text-shadow:none;}
+body.s19 .radio{gap:14px}
+body.s19 a{flex:0 0 auto;font-family:Futura,"Avenir Next","Helvetica Neue",ui-sans-serif,sans-serif;font-weight:600;letter-spacing:.22em;color:#ffd1ec;background:none;border:0;padding:6px 4px;border-radius:0;}
+body.s19 a+a::before{content:"/";color:#ffffff55;margin:0 18px 0 -8px}
+body.s19 a:hover,body.s19 a:focus-visible{background:none;color:#fff}
+/* 20 Dark tiles: near-black squares with a pastel edge on the left. */
+body.s20 h1{font-family:Futura,"Avenir Next","Helvetica Neue",ui-sans-serif,sans-serif;font-weight:800;letter-spacing:.08em;color:#fff;text-shadow:none}
+body.s20 a{font-family:Futura,"Avenir Next","Helvetica Neue",ui-sans-serif,sans-serif;font-weight:700;letter-spacing:.14em;color:#fff;background:#120a20e6;border:0;border-left:4px solid #ffb3de;border-radius:0;}
+body.s20 a+a{border-left-color:#a6f3e4}
+body.s20 a:hover,body.s20 a:focus-visible{background:#ffb3de;color:#2b1b4a}
+/* 21 Gradient bar: both buttons cut from one pink to mint gradient. */
+body.s21 h1{font-family:Futura,"Avenir Next","Helvetica Neue",ui-sans-serif,sans-serif;font-weight:800;letter-spacing:.08em;color:#fff;text-shadow:0 0 18px #ff8ad888}
+body.s21 .radio{gap:4px}
+body.s21 a{font-family:Futura,"Avenir Next","Helvetica Neue",ui-sans-serif,sans-serif;font-weight:700;letter-spacing:.14em;color:#2b1b4a;background:linear-gradient(90deg,#ffb3de,#c9b3ff);border:0;border-radius:0;}
+body.s21 a+a{background:linear-gradient(90deg,#c9b3ff,#a6f3e4)}
+body.s21 a:hover,body.s21 a:focus-visible{background:#fff}
+/* 22 to 31: in the flight display's green and amber, to match it. */
+/* 22 Flat green: pale green name, flat green squares. */
+body.s22 h1{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-weight:700;letter-spacing:.12em;color:#d4ffe0;text-shadow:0 0 12px #7dff9b66}
+body.s22 a{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-weight:700;letter-spacing:.1em;color:#04140a;background:#7dff9b;border:0;border-radius:0;}
+body.s22 a:hover,body.s22 a:focus-visible{background:#fff}
+/* 23 Green outline: green name, thin green square outlines. */
+body.s23 h1{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-weight:700;letter-spacing:.12em;color:#7dff9b;text-shadow:none}
+body.s23 a{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-weight:700;letter-spacing:.1em;color:#7dff9b;background:#04080a99;border:1px solid #7dff9b;border-radius:0;}
+body.s23 a:hover,body.s23 a:focus-visible{background:#7dff9b;color:#04140a}
+/* 24 Green underlines: links as text over green bars. */
+body.s24 h1{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-weight:700;letter-spacing:.12em;color:#d4ffe0;text-shadow:none}
+body.s24 .radio{gap:32px}
+body.s24 a{flex:0 0 auto;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-weight:700;letter-spacing:.14em;color:#d4ffe0;background:none;border:0;border-bottom:3px solid #7dff9b;padding:6px 2px;border-radius:0;}
+body.s24 a:hover,body.s24 a:focus-visible{background:none;color:#7dff9b}
+/* 25 Green and amber: one button in each display colour. */
+body.s25 h1{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-weight:700;letter-spacing:.12em;color:#7dff9b;text-shadow:none}
+body.s25 a{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-weight:700;letter-spacing:.1em;color:#04140a;background:#7dff9b;border:0;border-radius:0;}
+body.s25 a+a{background:#ffcf6a}
+body.s25 a:hover,body.s25 a:focus-visible{background:#fff}
+/* 26 Readouts: links in brackets, like display labels. */
+body.s26 h1{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-weight:700;letter-spacing:.12em;color:#7dff9b;text-shadow:none}
+body.s26 .radio{gap:20px}
+body.s26 a{flex:0 0 auto;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-weight:700;letter-spacing:.1em;color:#ffcf6a;background:none;border:0;padding:6px 2px;border-radius:0;}
+body.s26 a::before{content:"[ ";color:#7dff9b}
+body.s26 a::after{content:" ]";color:#7dff9b}
+body.s26 a:hover,body.s26 a:focus-visible{background:none;color:#fff}
+/* 27 Glow: light wide green name, thin glowing green outlines. */
+body.s27 h1{font-family:"Avenir Next","Helvetica Neue",ui-sans-serif,sans-serif;font-weight:300;letter-spacing:.3em;color:#7dff9b;text-shadow:0 0 14px #7dff9baa}
+body.s27 a{font-family:"Avenir Next","Helvetica Neue",ui-sans-serif,sans-serif;font-weight:500;letter-spacing:.24em;color:#7dff9b;background:#0000;border:1px solid #7dff9b;box-shadow:0 0 10px #7dff9b55,inset 0 0 8px #7dff9b33;border-radius:0;}
+body.s27 a:hover,body.s27 a:focus-visible{background:#7dff9b;color:#04140a}
+/* 28 Split bar: one bar, green on the left and amber on the right. */
+body.s28 h1{font-family:Futura,"Avenir Next","Helvetica Neue",ui-sans-serif,sans-serif;font-weight:800;letter-spacing:.08em;color:#d4ffe0;text-shadow:none}
+body.s28 .radio{gap:0}
+body.s28 a{font-family:Futura,"Avenir Next","Helvetica Neue",ui-sans-serif,sans-serif;font-weight:700;letter-spacing:.14em;color:#04140a;background:#7dff9b;border:0;border-radius:0;}
+body.s28 a+a{background:#ffcf6a}
+body.s28 a:hover,body.s28 a:focus-visible{background:#fff}
+/* 29 Dark tiles: near-black squares with a green or amber edge on the left. */
+body.s29 h1{font-family:Futura,"Avenir Next","Helvetica Neue",ui-sans-serif,sans-serif;font-weight:800;letter-spacing:.08em;color:#fff;text-shadow:none}
+body.s29 a{font-family:Futura,"Avenir Next","Helvetica Neue",ui-sans-serif,sans-serif;font-weight:700;letter-spacing:.14em;color:#fff;background:#04080ae6;border:0;border-left:4px solid #7dff9b;border-radius:0;}
+body.s29 a+a{border-left-color:#ffcf6a}
+body.s29 a:hover,body.s29 a:focus-visible{background:#7dff9b;color:#04140a}
+/* 30 Quiet: green name, small text links with a slash between. */
+body.s30 h1{font-family:Futura,"Avenir Next","Helvetica Neue",ui-sans-serif,sans-serif;font-weight:800;letter-spacing:.08em;color:#7dff9b;text-shadow:none}
+body.s30 .radio{gap:14px}
+body.s30 a{flex:0 0 auto;font-family:Futura,"Avenir Next","Helvetica Neue",ui-sans-serif,sans-serif;font-weight:600;letter-spacing:.22em;color:#d4ffe0;background:none;border:0;padding:6px 4px;border-radius:0;}
+body.s30 a+a::before{content:"/";color:#7dff9b88;margin:0 18px 0 -8px}
+body.s30 a:hover,body.s30 a:focus-visible{background:none;color:#7dff9b}
+/* 31 Sans green: white sans name, solid green squares with dark text. */
+body.s31 h1{font-family:Futura,"Avenir Next","Helvetica Neue",ui-sans-serif,sans-serif;font-weight:800;letter-spacing:.08em;color:#fff;text-shadow:none}
+body.s31 a{font-family:Futura,"Avenir Next","Helvetica Neue",ui-sans-serif,sans-serif;font-weight:700;letter-spacing:.14em;color:#04140a;background:#7dff9b;border:0;border-radius:0;}
+body.s31 a:hover,body.s31 a:focus-visible{background:#fff}
+/* All styles: a larger name on desktop than the live page. */
+body[class^=s] h1{font-size:clamp(20px,3vw,42px)}
+/* The switcher (preview only). */
+.pick{position:fixed;top:max(10px,env(safe-area-inset-top));right:10px;left:10px;justify-content:flex-end;flex-wrap:wrap;z-index:5;display:flex;gap:4px;font:600 13px ui-sans-serif,system-ui,sans-serif}
+.pick button{all:unset;cursor:pointer;width:26px;height:28px;display:grid;place-items:center;border-radius:8px;background:#ffffff1f;color:#fff;border:1px solid #ffffff40}
+.pick button[aria-pressed=true]{background:#ff71ce;color:#170a2c;border-color:#ff71ce}
+</style>
+</head>
+<body class="s1">
+<canvas id="c" aria-hidden="true"></canvas>
+<canvas id="hud" aria-label="A 64 neuron brain trained live by backpropagation through the drone physics flies a fleet that forms this person's name. Drag to hand fly."></canvas>
+<div class="panel">
+  <h1 id="name"></h1>
+  <p class="role" id="role"></p>
+  <div class="radio">
+    <a id="li" rel="me noopener">LINKEDIN</a>
+    <a id="gh" rel="me noopener">GITHUB</a>
+  </div>
+</div>
+<div class="pick" aria-label="Bottom panel style"><button data-s="1" title="Style 1">1</button><button data-s="2" title="Style 2">2</button><button data-s="3" title="Style 3">3</button><button data-s="4" title="Style 4">4</button><button data-s="5" title="Style 5">5</button><button data-s="6" title="Style 6">6</button><button data-s="7" title="Style 7">7</button><button data-s="8" title="Style 8">8</button><button data-s="9" title="Style 9">9</button><button data-s="10" title="Style 10">10</button><button data-s="11" title="Style 11">11</button><button data-s="12" title="Style 12">12</button><button data-s="13" title="Style 13">13</button><button data-s="14" title="Style 14">14</button><button data-s="15" title="Style 15">15</button><button data-s="16" title="Style 16">16</button><button data-s="17" title="Style 17">17</button><button data-s="18" title="Style 18">18</button><button data-s="19" title="Style 19">19</button><button data-s="20" title="Style 20">20</button><button data-s="21" title="Style 21">21</button><button data-s="22" title="Style 22">22</button><button data-s="23" title="Style 23">23</button><button data-s="24" title="Style 24">24</button><button data-s="25" title="Style 25">25</button><button data-s="26" title="Style 26">26</button><button data-s="27" title="Style 27">27</button><button data-s="28" title="Style 28">28</button><button data-s="29" title="Style 29">29</button><button data-s="30" title="Style 30">30</button><button data-s="31" title="Style 31">31</button></div>
+<script>
+// Preview switcher: ?s=1..31 picks a style; the buttons change it in place.
+{
+  const pick = n => {
+    document.body.className = "s" + n;
+    document.querySelectorAll(".pick button").forEach(b => b.setAttribute("aria-pressed", b.dataset.s == n));
+    history.replaceState(null, "", "?s=" + n);
+    dispatchEvent(new Event("resize"));
+  };
+  document.querySelectorAll(".pick button").forEach(b => b.onclick = () => pick(b.dataset.s));
+  pick(new URLSearchParams(location.search).get("s") || 1);
+}
+</script>
+<script src="../config.js"></script>
+<script src="shapes.js"></script>
+<script src="flight.js"></script>
+<script src="drone-sim.js"></script>
+<script src="brain.js"></script>
+<script src="fleet.js"></script>
+<script src="formation-kit.js"></script>
+<script>
+{
+// Backpropagation through time: the drone physics is differentiable, so each step follows the flight error back through
+// every time step, motor and neuron for exact gradients, and Adam updates a 64 neuron brain. It reaches about 2 cm in a second or so.
+FORMKIT.start({ task: "backprop" });
+}
+</script>
+</body>
+</html>
