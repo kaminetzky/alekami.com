@@ -9,6 +9,8 @@
     { "pattern": "alekami.com", "custom_domain": true },
     { "pattern": "www.alekami.com", "custom_domain": true },
     { "pattern": "alexkaminetzky.com", "custom_domain": true },
-    { "pattern": "www.alexkaminetzky.com", "custom_domain": true }
+    { "pattern": "www.alexkaminetzky.com", "custom_domain": true },
+    { "pattern": "kaminetzky.com", "custom_domain": true },
+    { "pattern": "www.kaminetzky.com", "custom_domain": true }
   ]
 }
