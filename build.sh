@@ -7,8 +7,10 @@ PAGE=56-backprop
 
 rm -rf site
 mkdir site
-sed 's#src="\.\./config\.js"#src="config.js"#' "options/$PAGE.html" > site/index.html
+sed 's#src="\.\./config\.js"#src="config.js"#; s#href="\.\./icons/#href="#' "options/$PAGE.html" > site/index.html
 cp config.js site/
+# The icons, at the site root, where browsers also look for favicon.ico on their own.
+cp icons/favicon.svg icons/favicon-32.png icons/favicon.ico icons/apple-touch-icon.png site/
 # Every script the page loads, plus drone-learn.js, which the training worker loads itself.
 for f in $(grep -o 'src="[a-z0-9-]*\.js"' "options/$PAGE.html" | sed 's/src="//; s/"//') drone-learn.js; do
   cp "options/$f" site/
