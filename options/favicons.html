@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Favicon options</title>
+<style>
+:root{--bg:#07061a;--ink:#e8e6f5;--soft:#9d98b8;--card:#120f2a;--line:#2a2550;--green:#7dff9b}
+html{background:var(--bg);color:var(--ink);font:15px/1.4 ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif}
+body{margin:0 auto;max-width:1040px;padding:24px 16px 48px}
+h1{font-size:22px;margin:0 0 4px}
+p.lead{color:var(--soft);margin:0 0 20px}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:14px}
+.card{background:var(--card);border:1px solid var(--line);padding:14px}
+.card h2{font-size:15px;margin:0 0 2px}
+.card p{color:var(--soft);margin:0 0 12px;font-size:13px}
+.sizes{display:flex;align-items:flex-end;gap:14px;margin-bottom:12px}
+.sizes img{display:block;image-rendering:auto}
+.sizes span{display:block;text-align:center;color:var(--soft);font-size:11px;margin-top:4px}
+.tab{display:flex;align-items:center;gap:8px;padding:7px 10px;font-size:12px;margin-top:6px;width:200px}
+.tab.light{background:#f1f1f4;color:#222}
+.tab.dark{background:#2b2b31;color:#eee}
+.tab img{width:16px;height:16px}
+button{margin-top:10px;font:600 13px inherit;color:#04140a;background:var(--green);border:0;padding:8px 12px;cursor:pointer}
+button[aria-pressed=true]{background:#fff}
+</style>
+</head>
+<body>
+<h1>Favicon options</h1>
+<p class="lead">Each shown at 64, 32 and 16 pixels, and in a light and a dark browser tab. "Use on this tab" puts it on this page's own tab, so you can see it for real.</p>
+<div class="grid" id="grid"></div>
+<script>
+{
+// Every option is a 64 by 64 SVG on the site's dark background, in the flight display's green and amber.
+const G = "#7dff9b", A = "#ffcf6a", BG = "#07061a", P = "#ff71ce";
+const frame = body => `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="12" fill="${BG}"/>${body}</svg>`;
+// The dot-matrix A from letters.js, as the drones would form it.
+const dotA = (() => {
+  const rows = "01110100011000111111100011000110001";
+  let s = "";
+  for (let i = 0; i < 35; i++) if (rows[i] === "1") s += `<circle cx="${14 + (i % 5) * 9}" cy="${5 + (i / 5 | 0) * 9}" r="3.4" fill="${G}"/>`;
+  return s;
+})();
+const OPTIONS = [
+  ["AK", "Your initials in the display's monospace green.",
+    frame(`<text x="32" y="43" text-anchor="middle" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-weight="700" font-size="30" fill="${G}">AK</text>`)],
+  ["Aircraft symbol", "The amber aircraft reference and green flight path marker from the display.",
+    frame(`<circle cx="32" cy="22" r="6" fill="none" stroke="${G}" stroke-width="3"/><path d="M26 22H18M38 22H46M32 16V11" stroke="${G}" stroke-width="3" stroke-linecap="round"/><path d="M8 40H22L27 47L32 40L37 47L42 40H56" fill="none" stroke="${A}" stroke-width="4" stroke-linejoin="round" stroke-linecap="round"/>`)],
+  ["Quadcopter", "A drone from above: X arms, four rotors and a centre light.",
+    frame(`<path d="M20 20L44 44M44 20L20 44" stroke="${G}" stroke-width="4" stroke-linecap="round"/><g fill="none" stroke="${G}" stroke-width="3"><circle cx="17" cy="17" r="8"/><circle cx="47" cy="17" r="8"/><circle cx="17" cy="47" r="8"/><circle cx="47" cy="47" r="8"/></g><circle cx="32" cy="32" r="4" fill="${A}"/>`)],
+  ["Synthwave sun", "A striped sun setting behind a green wireframe grid, like the site's sky.",
+    frame(`<defs><linearGradient id="s" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ffe46b"/><stop offset="1" stop-color="${P}"/></linearGradient><clipPath id="c"><rect width="64" height="64" rx="12"/></clipPath></defs><g clip-path="url(#c)"><circle cx="32" cy="34" r="20" fill="url(#s)"/><path d="M8 26H56M8 31H56M8 35H56" stroke="${BG}" stroke-width="2"/><rect y="38" width="64" height="26" fill="${BG}"/><path d="M0 42H64M0 48H64M0 56H64M32 38V64M20 38L8 64M44 38L56 64M10 38L-12 64M54 38L76 64" stroke="${G}" stroke-width="1.6"/></g>`)],
+  ["Fighter jet", "The jet the drones build, nose up, in green.",
+    frame(`<g transform="translate(32 33) rotate(-90) scale(.185) translate(-150 -85)" fill="none" stroke="${G}" stroke-width="10" stroke-linejoin="round"><path d="M296 85L250 76L196 68L112 14L96 14L102 60L68 62L30 32L16 32L18 66L4 70V100L18 104L16 138L30 138L68 108L102 110L96 156L112 156L196 102L250 94Z"/></g>`)],
+  ["Drone A", "The letter A as a dot-matrix drone formation.",
+    frame(dotA)],
+  ["Attitude", "The display's horizon, bank arc and pointer, banked a little.",
+    frame(`<path d="M12 30A22 22 0 0 1 52 30" fill="none" stroke="${G}" stroke-width="3" stroke-linecap="round"/><path d="M32 9L28 3H36Z" fill="${G}"/><g transform="rotate(-14 32 40)"><path d="M6 40H58" stroke="${G}" stroke-width="3.5" stroke-linecap="round"/><path d="M32 16L27 23H37Z" fill="${A}"/></g><path d="M20 48H27L32 53L37 48H44" fill="none" stroke="${A}" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>`)],
+  ["Neural net", "A tiny network: three inputs, four hidden neurons, two outputs.",
+    frame(`<g stroke="${G}" stroke-width="1.4" opacity=".55"><path d="M14 18L32 13M14 18L32 27M14 18L32 39M14 18L32 51M14 32L32 13M14 32L32 27M14 32L32 39M14 32L32 51M14 46L32 13M14 46L32 27M14 46L32 39M14 46L32 51M32 13L50 25M32 27L50 25M32 39L50 25M32 51L50 25M32 13L50 41M32 27L50 41M32 39L50 41M32 51L50 41"/></g><g fill="${G}"><circle cx="14" cy="18" r="4.5"/><circle cx="14" cy="32" r="4.5"/><circle cx="14" cy="46" r="4.5"/><circle cx="32" cy="13" r="4.5"/><circle cx="32" cy="27" r="4.5"/><circle cx="32" cy="39" r="4.5"/><circle cx="32" cy="51" r="4.5"/></g><g fill="${A}"><circle cx="50" cy="25" r="5"/><circle cx="50" cy="41" r="5"/></g>`)],
+];
+const url = svg => "data:image/svg+xml," + encodeURIComponent(svg);
+const link = document.createElement("link"); link.rel = "icon"; document.head.append(link);
+const grid = document.getElementById("grid");
+OPTIONS.forEach(([name, note, svg], i) => {
+  const src = url(svg), card = document.createElement("div");
+  card.className = "card";
+  card.innerHTML = `<h2>${i + 1}. ${name}</h2><p>${note}</p>
+    <div class="sizes">${[64, 32, 16].map(s => `<div><img src="${src}" width="${s}" height="${s}" alt=""><span>${s}</span></div>`).join("")}</div>
+    <div class="tab light"><img src="${src}" alt="">Alex Kaminetzky</div>
+    <div class="tab dark"><img src="${src}" alt="">Alex Kaminetzky</div>
+    <button type="button">Use on this tab</button>`;
+  card.querySelector("button").onclick = e => {
+    link.href = src;
+    document.querySelectorAll("button").forEach(b => b.setAttribute("aria-pressed", b === e.target));
+  };
+  grid.append(card);
+});
+}
+</script>
+</body>
+</html>
