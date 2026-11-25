@@ -47,7 +47,7 @@ The site runs on Cloudflare Workers with static assets.
 npx wrangler@4 deploy
 ```
 
-[build.sh](build.sh) copies the live page and only the scripts it loads into `site/`. [worker.js](worker.js) serves it on alekami.com and redirects my other addresses there.
+[build.sh](build.sh) copies the live page and only the scripts it loads into `site/`. [worker.js](worker.js) serves it on alekami.com, alexkaminetzky.com and kaminetzky.com, and redirects each www address to its bare domain.
 
 ## License
 
