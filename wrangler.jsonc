@@ -1,5 +1,5 @@
-// The live personal site: static files from site/ (built by build.sh), on alekami.com.
-// worker.js runs first on every request and redirects the other addresses to alekami.com.
+// The live personal site: static files from site/ (built by build.sh), on alekami.com, alexkaminetzky.com and kaminetzky.com.
+// worker.js runs first on every request and redirects each www host to its bare domain.
 {
   "name": "alekami-site",
   "compatibility_date": "2026-11-01",
